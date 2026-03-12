@@ -8,7 +8,6 @@ import (
 
 const indexName = "index.html"
 
-// SPA serves files from fs. Missing paths fall back to index.html so the client app can handle routing.
 func SPA(fs http.FileSystem) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {

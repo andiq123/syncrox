@@ -33,18 +33,7 @@ function decodeOneChunk(b64: string): Uint8Array | null {
 
 export function base64ToBytes(b64: string): Uint8Array | null {
   if (!b64 || typeof b64 !== 'string') return null
-  const clean = sanitizeBase64(b64)
-  if (!clean.length) return null
-  const pad = clean.length % 4
-  const padded = pad ? clean + '='.repeat(4 - pad) : clean
-  try {
-    const binary = atob(padded)
-    const bytes = new Uint8Array(binary.length)
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-    return bytes
-  } catch {
-    return null
-  }
+  return decodeOneChunk(b64)
 }
 
 export function base64ChunksToBytes(chunks: string[]): Uint8Array | null {

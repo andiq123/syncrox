@@ -7,6 +7,7 @@ import {
   type TextPayload,
   type FileStartPayload,
   type FileEndPayload,
+  type JoinedPayload,
 } from './protocol'
 import { useSocket } from './useSocket'
 import { ConnectionStatus } from './ConnectionStatus'
@@ -15,7 +16,26 @@ import { MessageInput } from './MessageInput'
 import { FileList } from './FileList'
 import { FileInput } from './FileInput'
 
-type MessageItem = { id: string; body: string; at: number; direction: 'out' | 'in' }
+function triggerDownload(blob: Blob, name: string): void {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  a.rel = 'noopener noreferrer'
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(url), 200)
+}
+
+type MessageItem = {
+  id: string
+  body: string
+  at: number
+  direction: 'out' | 'in'
+  senderName?: string | null
+}
 
 type IncomingFile = {
   transferId: string
@@ -25,6 +45,7 @@ type IncomingFile = {
   chunks: Map<number, Uint8Array>
   received: number
   done: boolean
+  senderName?: string | null
 }
 
 type OutgoingFile = {
@@ -33,6 +54,26 @@ type OutgoingFile = {
   size: number
   sent: number
   done: boolean
+  senderName?: string | null
+}
+
+function makeIncomingFileEntry(
+  transferId: string,
+  name: string,
+  size: number,
+  mimeType: string,
+  senderName?: string | null,
+): IncomingFile {
+  return {
+    transferId,
+    name,
+    size,
+    mimeType,
+    chunks: new Map<number, Uint8Array>(),
+    received: 0,
+    done: false,
+    senderName: senderName ?? null,
+  }
 }
 
 type Props = {
@@ -49,6 +90,7 @@ export function Transfer({ sessionCode }: Props) {
   const incomingRef = useRef<Map<string, IncomingFile>>(new Map())
   const outgoingBlobsRef = useRef<Map<string, { name: string; blob: Blob }>>(new Map())
   const [transferSpeeds, setTransferSpeeds] = useState<Map<string, number>>(new Map())
+  const [peerName, setPeerName] = useState<string | null>(null)
   const lastSampleRef = useRef<Map<string, { bytes: number; time: number }>>(new Map())
   const outgoingSnapshotRef = useRef<Map<string, OutgoingFile>>(new Map())
   const incomingSnapshotRef = useRef<Map<string, IncomingFile>>(new Map())
@@ -85,7 +127,12 @@ export function Transfer({ sessionCode }: Props) {
       return
     }
     switch (e.type) {
-      case MessageType.Joined:
+      case MessageType.Joined: {
+        const p = e.payload as JoinedPayload
+        setPeerName(p?.name ?? null)
+        return
+      }
+      case MessageType.PeerJoined:
         return
       case MessageType.Error: {
         const p = e.payload as { message?: string }
@@ -97,35 +144,32 @@ export function Transfer({ sessionCode }: Props) {
         if (!p?.body) return
         setMessages((prev) => [
           ...prev,
-          { id: `m-${++msgIdRef.current}`, body: p.body, at: Date.now(), direction: 'in' },
+          {
+            id: `m-${++msgIdRef.current}`,
+            body: p.body,
+            at: Date.now(),
+            direction: 'in',
+            senderName: p.sender_name ?? null,
+          },
         ])
         return
       }
       case MessageType.FileStart: {
         const p = e.payload as FileStartPayload
         if (!p?.transfer_id || !p?.name) return
+        const entry = makeIncomingFileEntry(
+          p.transfer_id,
+          p.name,
+          p.size,
+          p.mime_type ?? '',
+          p.sender_name,
+        )
         setIncomingFiles((prev) => {
           const next = new Map(prev)
-          next.set(p.transfer_id, {
-            transferId: p.transfer_id,
-            name: p.name,
-            size: p.size,
-            mimeType: p.mime_type ?? '',
-            chunks: new Map<number, Uint8Array>(),
-            received: 0,
-            done: false,
-          })
+          next.set(p.transfer_id, { ...entry, chunks: new Map(entry.chunks) })
           return next
         })
-        incomingRef.current.set(p.transfer_id, {
-          transferId: p.transfer_id,
-          name: p.name,
-          size: p.size,
-          mimeType: p.mime_type ?? '',
-          chunks: new Map<number, Uint8Array>(),
-          received: 0,
-          done: false,
-        })
+        incomingRef.current.set(p.transfer_id, { ...entry, chunks: new Map(entry.chunks) })
         return
       }
       case MessageType.FileEnd: {
@@ -153,6 +197,7 @@ export function Transfer({ sessionCode }: Props) {
   const purgeSession = useCallback(() => {
     setConnectionError(null)
     setTransferSpeeds(new Map())
+    setPeerName(null)
     lastSampleRef.current.clear()
     setMessages([])
     setIncomingFiles(new Map())
@@ -168,35 +213,36 @@ export function Transfer({ sessionCode }: Props) {
 
   useEffect(() => {
     if (state !== 'connected') return
+    const last = lastSampleRef.current
+    const recordSample = (
+      id: string,
+      bytes: number,
+      now: number,
+      next: Map<string, number>,
+    ) => {
+      const prev = last.get(id)
+      last.set(id, { bytes, time: now })
+      if (prev && now > prev.time) {
+        const dt = (now - prev.time) / 1000
+        if (dt > 0) next.set(id, (bytes - prev.bytes) / dt)
+      }
+    }
     const interval = setInterval(() => {
       const now = Date.now()
       const next = new Map<string, number>()
-      const last = lastSampleRef.current
       const outgoing = outgoingSnapshotRef.current
       const incoming = incomingSnapshotRef.current
 
       outgoing.forEach((f, id) => {
         if (f.done) return
-        const bytes = f.sent * ChunkSize
-        const prev = last.get(id)
-        last.set(id, { bytes, time: now })
-        if (prev && now > prev.time) {
-          const dt = (now - prev.time) / 1000
-          if (dt > 0) next.set(id, (bytes - prev.bytes) / dt)
-        }
+        recordSample(id, f.sent * ChunkSize, now, next)
       })
-
       incoming.forEach((f, id) => {
         if (f.done) return
         const refFile = incomingRef.current.get(id)
         const received = refFile?.chunks.size ?? f.received
         const bytes = f.size ? Math.min(f.size, received * ChunkSize) : received * ChunkSize
-        const prev = last.get(id)
-        last.set(id, { bytes, time: now })
-        if (prev && now > prev.time) {
-          const dt = (now - prev.time) / 1000
-          if (dt > 0) next.set(id, (bytes - prev.bytes) / dt)
-        }
+        recordSample(id, bytes, now, next)
       })
 
       setTransferSpeeds((prev) => {
@@ -215,6 +261,7 @@ export function Transfer({ sessionCode }: Props) {
       setMessages([])
       setIncomingFiles(new Map())
       setOutgoingFiles(new Map())
+      setPeerName(null)
       incomingRef.current.clear()
       outgoingBlobsRef.current.clear()
     }
@@ -226,10 +273,16 @@ export function Transfer({ sessionCode }: Props) {
       send(JSON.stringify({ type: MessageType.Text, payload: { body: body.trim() } }))
       setMessages((prev) => [
         ...prev,
-        { id: `m-${++msgIdRef.current}`, body: body.trim(), at: Date.now(), direction: 'out' },
+        {
+          id: `m-${++msgIdRef.current}`,
+          body: body.trim(),
+          at: Date.now(),
+          direction: 'out',
+          senderName: peerName ?? undefined,
+        },
       ])
     },
-    [send],
+    [send, peerName],
   )
 
   const sendFile = useCallback(
@@ -238,7 +291,14 @@ export function Transfer({ sessionCode }: Props) {
       const size = file.size
       setOutgoingFiles((prev) => {
         const next = new Map(prev)
-        next.set(transferId, { transferId, name: file.name, size, sent: 0, done: false })
+        next.set(transferId, {
+          transferId,
+          name: file.name,
+          size,
+          sent: 0,
+          done: false,
+          senderName: peerName ?? undefined,
+        })
         return next
       })
 
@@ -305,22 +365,14 @@ export function Transfer({ sessionCode }: Props) {
       const blob = new Blob(parts, { type: file.type || undefined })
       outgoingBlobsRef.current.set(transferId, { name: file.name, blob })
     },
-    [send],
+    [send, peerName],
   )
 
   const downloadIncoming = useCallback((transferId: string) => {
-    console.log('[downloadIncoming] called', transferId)
     const fileRef = incomingRef.current.get(transferId)
     const fileState = incomingFiles.get(transferId)
     const file = fileRef ?? fileState
-    if (!file) {
-      console.warn('[downloadIncoming] no file for transferId', transferId)
-      return
-    }
-    if (!file.done) {
-      console.warn('[downloadIncoming] file not done', transferId)
-      return
-    }
+    if (!file || !file.done) return
     const refChunks = fileRef?.chunks ?? new Map<number, Uint8Array>()
     const stateChunks = fileState?.chunks ?? new Map<number, Uint8Array>()
     const allKeys = new Set([...refChunks.keys(), ...stateChunks.keys()])
@@ -330,36 +382,15 @@ export function Transfer({ sessionCode }: Props) {
       const part = refChunks.get(k) ?? stateChunks.get(k)
       if (part?.length) parts.push(part)
     }
-    if (parts.length === 0) {
-      console.warn('[downloadIncoming] no chunks', transferId, {
-        refSize: refChunks.size,
-        stateSize: stateChunks.size,
-      })
-      return
-    }
+    if (parts.length === 0) return
     const blob = new Blob(parts, { type: file.mimeType || undefined })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = file.name
-    a.rel = 'noopener noreferrer'
-    a.style.display = 'none'
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    console.log('[downloadIncoming] download triggered', file.name, parts.length, 'parts')
-    setTimeout(() => URL.revokeObjectURL(url), 200)
+    triggerDownload(blob, file.name)
   }, [incomingFiles])
 
   const downloadOutgoing = useCallback((transferId: string) => {
     const stored = outgoingBlobsRef.current.get(transferId)
     if (!stored) return
-    const url = URL.createObjectURL(stored.blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = stored.name
-    a.click()
-    URL.revokeObjectURL(url)
+    triggerDownload(stored.blob, stored.name)
   }, [])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -381,9 +412,8 @@ export function Transfer({ sessionCode }: Props) {
       if (state !== 'connected') return
       const files = e.dataTransfer?.files
       if (!files?.length) return
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i]
-        if (file?.name) sendFile(file)
+      for (const file of Array.from(files)) {
+        if (file.name) sendFile(file)
       }
     },
     [sendFile, state],
@@ -415,7 +445,7 @@ export function Transfer({ sessionCode }: Props) {
   return (
     <div className="transfer">
       <header className="transfer-header">
-        <ConnectionStatus state={state} />
+        <ConnectionStatus state={state} peerName={peerName} />
         <button
           type="button"
           className="btn btn-ghost btn-small"

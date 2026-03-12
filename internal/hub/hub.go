@@ -1,7 +1,3 @@
-// Package hub manages rooms and peers in memory only. No messages or file
-// content are stored; when the last peer leaves a room it is removed.
-// Broadcast blocks on send (backpressure) so slow receivers throttle senders;
-// peer context is used to avoid blocking on disconnected peers.
 package hub
 
 import (
@@ -9,36 +5,42 @@ import (
 	"sync"
 )
 
-// Peer is a single connection in a room. Send receives relayed messages.
-// Ctx is cancelled when the peer disconnects so Broadcast can stop sending.
 type Peer struct {
 	ID   string
+	Name string
 	Send chan []byte
 	Ctx  context.Context
 }
 
+type PeerInfo struct {
+	ID   string `json:"peer_id"`
+	Name string `json:"name"`
+}
+
 const MaxPeersPerRoom = 5
 
-// Room holds up to MaxPeersPerRoom peers. Access to Peers is guarded by mu.
 type Room struct {
 	Code  string
 	Peers map[string]*Peer
 	mu    sync.RWMutex
 }
 
-// Broadcast sends data to every peer except excludeID. It blocks until the
-// message is sent or the peer's context is done (backpressure, no drops).
-func (r *Room) Broadcast(excludeID string, data []byte) {
+type CopyFn func(data []byte) []byte
+
+func (r *Room) Broadcast(excludeID string, data []byte, copyFn CopyFn) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for id, p := range r.Peers {
 		if id == excludeID {
 			continue
 		}
+		payload := data
+		if copyFn != nil {
+			payload = copyFn(data)
+		}
 		select {
-		case p.Send <- data:
+		case p.Send <- payload:
 		case <-p.Ctx.Done():
-			// Peer disconnected; skip instead of blocking forever
 		}
 	}
 }
@@ -63,6 +65,19 @@ func (r *Room) PeerCount() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.Peers)
+}
+
+func (r *Room) PeerInfos(excludeID string) []PeerInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]PeerInfo, 0, len(r.Peers))
+	for id, p := range r.Peers {
+		if id == excludeID {
+			continue
+		}
+		out = append(out, PeerInfo{ID: id, Name: p.Name})
+	}
+	return out
 }
 
 type Hub struct {

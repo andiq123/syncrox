@@ -24,7 +24,6 @@ func main() {
 	if port == "" {
 		port = "5090"
 	}
-	// Empty list = allow any origin (for LAN access via rasp.local, IP, etc.)
 	h := hub.New()
 	const defaultSessionCode = "DEFALT"
 	wsHandler := ws.NewHandler(h, nil, defaultSessionCode)
@@ -53,8 +52,6 @@ func main() {
 	}
 	mux.Handle("/", serve.SPA(http.FS(staticRoot)))
 
-	// Read/WriteTimeout apply only until the WebSocket upgrade (hijack); long-lived
-	// WS connections are not subject to these, so large file transfers are allowed.
 	srv := &http.Server{
 		Addr:         ":" + port,
 		Handler:      corsMiddleware(nil, mux),

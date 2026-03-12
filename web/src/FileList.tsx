@@ -6,6 +6,7 @@ type Incoming = {
   progress: number
   remaining: number
   speed?: number
+  senderName?: string | null
 }
 
 type Outgoing = {
@@ -16,6 +17,7 @@ type Outgoing = {
   done: boolean
   remaining: number
   speed?: number
+  senderName?: string | null
 }
 
 type Props = {
@@ -58,6 +60,80 @@ function FileIcon() {
   )
 }
 
+type FileListItemProps = {
+  name: string
+  size: number
+  done: boolean
+  remaining: number
+  speed?: number
+  senderName?: string | null
+  direction: 'in' | 'out'
+  progressValue: number
+  progressMax: number
+  progressAriaLabel: string
+  onDownload: () => void
+}
+
+function formatSender(senderName: string): string {
+  return senderName.replace(/_/g, ' ')
+}
+
+function FileListItem({
+  name,
+  size,
+  done,
+  remaining,
+  speed,
+  senderName,
+  direction,
+  progressValue,
+  progressMax,
+  progressAriaLabel,
+  onDownload,
+}: FileListItemProps) {
+  const showSpeed = !done && speed != null && speed > 0
+  const showRemaining = !done && remaining > 0
+
+  return (
+    <li className={`file-item file-item--${direction}`}>
+      <FileIcon />
+      <div className="file-item-info">
+        <span className="file-item-name">{name}</span>
+        {senderName && (
+          <span className="file-item-sender" aria-label={`From ${formatSender(senderName)}`}>
+            from {formatSender(senderName)}
+          </span>
+        )}
+        <div className="file-item-meta" aria-live="polite">
+          <span className="file-item-size">{formatSize(size)}</span>
+          {showRemaining && (
+            <span className="file-item-remaining" aria-label={formatRemaining(remaining)}>
+              {formatRemaining(remaining)}
+            </span>
+          )}
+          {showSpeed && (
+            <span className="file-item-speed" aria-label={`Speed ${formatSpeed(speed)}`}>
+              {formatSpeed(speed)}
+            </span>
+          )}
+        </div>
+      </div>
+      {!done ? (
+        <progress
+          className="file-progress"
+          value={progressValue}
+          max={progressMax}
+          aria-label={progressAriaLabel}
+        />
+      ) : (
+        <button type="button" className="btn btn-download" onClick={onDownload}>
+          Download
+        </button>
+      )}
+    </li>
+  )
+}
+
 export function FileList({
   incoming,
   outgoing,
@@ -77,78 +153,36 @@ export function FileList({
       ) : (
         <ul className="file-list-ul" aria-label="File transfers">
           {outgoing.map((f) => (
-            <li key={f.transferId} className="file-item file-item--out">
-              <FileIcon />
-              <div className="file-item-info">
-                <span className="file-item-name">{f.name}</span>
-                <div className="file-item-meta" aria-live="polite">
-                  <span className="file-item-size">{formatSize(f.size)}</span>
-                  {!f.done && f.remaining > 0 && (
-                    <span className="file-item-remaining" aria-label={formatRemaining(f.remaining)}>
-                      {formatRemaining(f.remaining)}
-                    </span>
-                  )}
-                  {!f.done && f.speed != null && f.speed > 0 && (
-                    <span className="file-item-speed" aria-label={`Speed ${formatSpeed(f.speed)}`}>
-                      {formatSpeed(f.speed)}
-                    </span>
-                  )}
-                </div>
-              </div>
-              {!f.done ? (
-                <progress
-                  className="file-progress"
-                  value={f.sent * chunkSize}
-                  max={f.size}
-                  aria-label={`Sending ${f.name}, ${formatRemaining(f.remaining)}`}
-                />
-              ) : (
-                <button
-                  type="button"
-                  className="btn btn-download"
-                  onClick={() => onDownloadOutgoing(f.transferId)}
-                >
-                  Download
-                </button>
-              )}
-            </li>
+            <FileListItem
+              key={f.transferId}
+              name={f.name}
+              size={f.size}
+              done={f.done}
+              remaining={f.remaining}
+              speed={f.speed}
+              senderName={f.senderName}
+              direction="out"
+              progressValue={f.sent * chunkSize}
+              progressMax={f.size}
+              progressAriaLabel={`Sending ${f.name}, ${formatRemaining(f.remaining)}`}
+              onDownload={() => onDownloadOutgoing(f.transferId)}
+            />
           ))}
           {incoming.map((f) => (
-            <li key={f.transferId} className="file-item file-item--in">
-              <FileIcon />
-              <div className="file-item-info">
-                <span className="file-item-name">{f.name}</span>
-                <div className="file-item-meta" aria-live="polite">
-                  <span className="file-item-size">{formatSize(f.size)}</span>
-                  {!f.done && f.remaining > 0 && (
-                    <span className="file-item-remaining" aria-label={formatRemaining(f.remaining)}>
-                      {formatRemaining(f.remaining)}
-                    </span>
-                  )}
-                  {!f.done && f.speed != null && f.speed > 0 && (
-                    <span className="file-item-speed" aria-label={`Speed ${formatSpeed(f.speed)}`}>
-                      {formatSpeed(f.speed)}
-                    </span>
-                  )}
-                </div>
-              </div>
-              {!f.done ? (
-                <progress
-                  className="file-progress"
-                  value={f.progress * f.size}
-                  max={f.size}
-                  aria-label={`Receiving ${f.name}, ${formatRemaining(f.remaining)}`}
-                />
-              ) : (
-                <button
-                  type="button"
-                  className="btn btn-download"
-                  onClick={() => onDownloadIncoming(f.transferId)}
-                >
-                  Download
-                </button>
-              )}
-            </li>
+            <FileListItem
+              key={f.transferId}
+              name={f.name}
+              size={f.size}
+              done={f.done}
+              remaining={f.remaining}
+              speed={f.speed}
+              senderName={f.senderName}
+              direction="in"
+              progressValue={f.progress * f.size}
+              progressMax={f.size}
+              progressAriaLabel={`Receiving ${f.name}, ${formatRemaining(f.remaining)}`}
+              onDownload={() => onDownloadIncoming(f.transferId)}
+            />
           ))}
         </ul>
       )}

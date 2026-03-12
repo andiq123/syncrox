@@ -1,21 +1,17 @@
-// Package protocol defines the WebSocket message envelope and payload types
-// used between client and server. The server relays messages as opaque frames;
-// chunk size is a client-side choice and must fit within the server's relay buffer.
 package protocol
 
 const (
-	TypeJoin           = "join"
-	TypeJoined         = "joined"
-	TypeError          = "error"
-	TypeText           = "text"
-	TypeFileStart      = "file_start"
-	TypeFileChunk      = "file_chunk"
-	TypeFileEnd        = "file_end"
-	TypeServerClosing  = "server_closing"
+	TypeJoin          = "join"
+	TypeJoined        = "joined"
+	TypePeerJoined    = "peer_joined"
+	TypeError         = "error"
+	TypeText          = "text"
+	TypeFileStart     = "file_start"
+	TypeFileChunk     = "file_chunk"
+	TypeFileEnd       = "file_end"
+	TypeServerClosing = "server_closing"
 )
 
-// DefaultChunkSize is the default file chunk size (512KB). Binary protocol;
-// relay buffer must fit chunk + small header (~768KB).
 const DefaultChunkSize = 512 * 1024
 
 type Envelope struct {
@@ -28,7 +24,19 @@ type JoinPayload struct {
 }
 
 type JoinedPayload struct {
-	Code string `json:"code"`
+	Code  string     `json:"code"`
+	Name  string     `json:"name"`
+	Peers []PeerInfo `json:"peers,omitempty"`
+}
+
+type PeerInfo struct {
+	ID   string `json:"peer_id"`
+	Name string `json:"name"`
+}
+
+type PeerJoinedPayload struct {
+	PeerID string `json:"peer_id"`
+	Name   string `json:"name"`
 }
 
 type ErrorPayload struct {

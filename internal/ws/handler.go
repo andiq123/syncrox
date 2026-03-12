@@ -1,11 +1,8 @@
-// Package ws handles WebSocket upgrades and relays frames between peers in a room.
-// It does not store or persist any message or file content. Optimized for large
-// file transfers (100GB+): stream-one-message-at-a-time relay, buffer pool to
-// avoid allocations, and backpressure so memory stays bounded on low-RAM hosts.
 package ws
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -14,16 +11,13 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/syncrox/syncrox/internal/hub"
+	"github.com/syncrox/syncrox/internal/peerlabel"
 	"github.com/syncrox/syncrox/internal/protocol"
 )
 
 const (
-	// RelayBufferSize is the size of one relay buffer. Must fit binary chunk:
-	// 512KB payload + transferId + index (~768KB).
 	RelayBufferSize = 768 * 1024
-	// SendQueueCap is the number of messages buffered per peer. Memory per peer
-	// is at most SendQueueCap * RelayBufferSize (e.g. 16 * 768KB = 12MB).
-	SendQueueCap = 16
+	SendQueueCap    = 16
 )
 
 var defaultUpgrader = websocket.Upgrader{
@@ -65,6 +59,18 @@ func NewHandler(h *hub.Hub, allowOrigins []string, defaultSessionCode string) *H
 	}
 }
 
+func (h *Handler) getOrCreateRoom(code string) *hub.Room {
+	room := h.Hub.GetRoom(code)
+	if room != nil {
+		return room
+	}
+	if code == h.DefaultSessionCode {
+		h.Hub.CreateRoom(code)
+		return h.Hub.GetRoom(code)
+	}
+	return nil
+}
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	slog.Info("ws connection attempt", "remote", r.RemoteAddr, "code", r.URL.Query().Get("code"))
 	code := r.URL.Query().Get("code")
@@ -72,14 +78,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid or missing room code", http.StatusBadRequest)
 		return
 	}
-
-	if h.Hub.GetRoom(code) == nil {
-		if code == h.DefaultSessionCode {
-			h.Hub.CreateRoom(code)
-		} else {
-			http.Error(w, "room not found", http.StatusNotFound)
-			return
-		}
+	room := h.getOrCreateRoom(code)
+	if room == nil {
+		http.Error(w, "room not found", http.StatusNotFound)
+		return
 	}
 
 	slog.Info("ws upgrading", "remote", r.RemoteAddr)
@@ -91,29 +93,34 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	peerID := h.nextPeerID()
+	peerName := peerlabel.GenerateName(r.Header.Get("User-Agent"))
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-
 	peer := &hub.Peer{
 		ID:   peerID,
+		Name: peerName,
 		Send: make(chan []byte, SendQueueCap),
 		Ctx:  ctx,
 	}
 
-	room, err := h.Hub.JoinRoom(r.Context(), code, peer)
-	if err != nil {
+	if _, err := h.Hub.JoinRoom(r.Context(), code, peer); err != nil {
 		slog.Warn("join room failed", "code", code, "peer", peerID, "err", err)
 		writeError(conn, err.Error())
 		return
 	}
 	defer h.Hub.LeaveRoom(code, peerID)
 
-	slog.Info("peer joined", "room", code, "peer", peerID)
-
-	if err := writeJoined(conn, code); err != nil {
+	slog.Info("peer joined", "room", code, "peer", peerID, "name", peerName)
+	otherPeers := room.PeerInfos(peerID)
+	protoPeers := make([]protocol.PeerInfo, len(otherPeers))
+	for i, p := range otherPeers {
+		protoPeers[i] = protocol.PeerInfo{ID: p.ID, Name: p.Name}
+	}
+	if err := writeJoined(conn, code, peerName, protoPeers); err != nil {
 		slog.Warn("write joined failed", "err", err, "peer", peerID)
 		return
 	}
+	h.broadcastPeerJoined(room, peerID, peerName)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -121,7 +128,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer wg.Done()
 		h.writePump(ctx, conn, peer)
 	}()
-
 	h.readPump(ctx, conn, room, peer)
 	cancel()
 	close(peer.Send)
@@ -163,15 +169,40 @@ func (h *Handler) readPump(ctx context.Context, conn *websocket.Conn, room *hub.
 			slog.Debug("read message failed", "err", err)
 			return
 		}
+		if messageType == websocket.TextMessage {
+			raw = injectSender(raw, peer.ID, peer.Name)
+		}
 		relay := h.copyForRelay(messageType, raw)
 		if relay == nil {
 			continue
 		}
-		room.Broadcast(peer.ID, relay)
+		room.Broadcast(peer.ID, relay, h.copyForBroadcast)
+		h.returnToPool(relay)
 	}
 }
 
-// copyForRelay stores messageType in the first byte and raw in the rest. Caller must returnToPool.
+func injectSender(raw []byte, peerID, peerName string) []byte {
+	var env map[string]any
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return raw
+	}
+	typ, _ := env["type"].(string)
+	if typ != protocol.TypeText && typ != protocol.TypeFileStart && typ != protocol.TypeFileEnd {
+		return raw
+	}
+	payload, ok := env["payload"].(map[string]any)
+	if !ok {
+		return raw
+	}
+	payload["sender_id"] = peerID
+	payload["sender_name"] = peerName
+	out, err := json.Marshal(env)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
 func (h *Handler) copyForRelay(messageType int, raw []byte) []byte {
 	if 1+len(raw) > RelayBufferSize {
 		slog.Debug("relay message too large, dropped", "len", len(raw), "max", RelayBufferSize-1)
@@ -181,6 +212,12 @@ func (h *Handler) copyForRelay(messageType int, raw []byte) []byte {
 	buf[0] = byte(messageType)
 	n := copy(buf[1:], raw)
 	return buf[:1+n]
+}
+
+func (h *Handler) copyForBroadcast(data []byte) []byte {
+	buf := h.bufPool.Get().([]byte)
+	n := copy(buf, data)
+	return buf[:n]
 }
 
 func (h *Handler) writePump(ctx context.Context, conn *websocket.Conn, peer *hub.Peer) {
@@ -211,20 +248,41 @@ func (h *Handler) returnToPool(b []byte) {
 }
 
 func writeError(conn *websocket.Conn, msg string) {
-	body, _ := protocol.EncodeEnvelope(&protocol.Envelope{
+	body, err := protocol.EncodeEnvelope(&protocol.Envelope{
 		Type:    protocol.TypeError,
 		Payload: protocol.ErrorPayload{Message: msg},
 	})
+	if err != nil {
+		slog.Debug("encode error envelope failed", "err", err)
+		return
+	}
 	_ = conn.WriteMessage(websocket.TextMessage, body)
 }
 
-func writeJoined(conn *websocket.Conn, code string) error {
+func writeJoined(conn *websocket.Conn, code, name string, peers []protocol.PeerInfo) error {
 	body, err := protocol.EncodeEnvelope(&protocol.Envelope{
 		Type:    protocol.TypeJoined,
-		Payload: protocol.JoinedPayload{Code: code},
+		Payload: protocol.JoinedPayload{Code: code, Name: name, Peers: peers},
 	})
 	if err != nil {
 		return err
 	}
 	return conn.WriteMessage(websocket.TextMessage, body)
+}
+
+func (h *Handler) broadcastPeerJoined(room *hub.Room, peerID, name string) {
+	body, err := protocol.EncodeEnvelope(&protocol.Envelope{
+		Type:    protocol.TypePeerJoined,
+		Payload: protocol.PeerJoinedPayload{PeerID: peerID, Name: name},
+	})
+	if err != nil {
+		slog.Debug("encode peer_joined failed", "err", err)
+		return
+	}
+	relay := h.copyForRelay(websocket.TextMessage, body)
+	if relay == nil {
+		return
+	}
+	room.Broadcast(peerID, relay, h.copyForBroadcast)
+	h.returnToPool(relay)
 }

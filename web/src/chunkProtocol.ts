@@ -1,9 +1,3 @@
-/**
- * Binary chunk protocol for file transfer. Chunks are sent as raw binary
- * (no base64) for maximum throughput on localhost.
- * Format: [2B idLen LE][id UTF-8][4B index LE][payload bytes]
- */
-
 const ID_LEN_BYTES = 2
 const INDEX_BYTES = 4
 const HEADER_BYTES = ID_LEN_BYTES + INDEX_BYTES

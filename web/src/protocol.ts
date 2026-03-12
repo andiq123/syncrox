@@ -1,6 +1,7 @@
 export const MessageType = {
   Join: 'join',
   Joined: 'joined',
+  PeerJoined: 'peer_joined',
   Error: 'error',
   Text: 'text',
   FileStart: 'file_start',
@@ -14,12 +15,13 @@ export type Envelope = {
   payload?: unknown
 }
 
-export type TextPayload = { body: string }
 export type FileStartPayload = {
   transfer_id: string
   name: string
   size: number
   mime_type?: string
+  sender_id?: string
+  sender_name?: string
 }
 export type FileChunkPayload = {
   transfer_id: string
@@ -28,6 +30,9 @@ export type FileChunkPayload = {
 }
 export type FileEndPayload = { transfer_id: string }
 export type ErrorPayload = { message: string }
-export type JoinedPayload = { code: string }
+export type PeerInfo = { peer_id: string; name: string }
+export type JoinedPayload = { code: string; name?: string; peers?: PeerInfo[] }
+export type PeerJoinedPayload = { peer_id: string; name: string }
+export type TextPayload = { body: string; sender_id?: string; sender_name?: string }
 
 export const ChunkSize = 512 * 1024

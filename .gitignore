@@ -1,5 +1,48 @@
-tmp/
-*.log
+# Dependencies
+node_modules/
+vendor/
+
+# Build and binaries
+dist/
+build/
+*.exe
+syncrox
+
+# Environment and secrets
 .env
 .env.*
-node_modules/
+!.env.example
+
+# Logs and temp
+*.log
+tmp/
+temp/
+.cache/
+
+# OS junk
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editor and IDE
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# Debug and coverage
+*.test
+coverage/
+*.out
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
