@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/connectionstatus.tsx","./src/fileinput.tsx","./src/filelist.tsx","./src/messageinput.tsx","./src/messagelist.tsx","./src/transfer.tsx","./src/api.ts","./src/base64.ts","./src/chunkprotocol.ts","./src/main.tsx","./src/protocol.ts","./src/usesocket.ts","./src/vite-env.d.ts"],"version":"5.6.3"}

@@ -1,0 +1,24 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+cmd = "go build -o ./tmp/syncrox ./cmd/server"
+bin = "tmp/syncrox"
+include_ext = ["go"]
+exclude_dir = ["tmp", "vendor", "web"]
+exclude_regex = ["_test\\.go"]
+exclude_unchanged = true
+delay = 300
+stop_on_error = true
+log = "air.log"
+
+[log]
+time = false
+main_only = false
+
+[misc]
+clean_on_exit = true
+
+[screen]
+clear_on_rebuild = true
+keep_scroll = true
