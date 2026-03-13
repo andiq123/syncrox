@@ -205,21 +205,6 @@ a {
   border: 0;
 }
 
-.app-loading {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  color: var(--text-muted);
-  font-size: 0.875rem;
-}
-
-.app-loading-retry {
-  margin-top: 0.25rem;
-}
-
 .btn {
   display: inline-flex;
   align-items: center;

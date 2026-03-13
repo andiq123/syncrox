@@ -74,15 +74,11 @@ func (h *Handler) getOrCreateRoom(code string) *hub.Room {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	slog.Info("ws connection attempt", "remote", r.RemoteAddr, "code", r.URL.Query().Get("code"))
 	code := r.URL.Query().Get("code")
-	if code == "" || !hub.ValidateRoomCode(code) {
-		http.Error(w, "invalid or missing room code", http.StatusBadRequest)
+	if code != h.DefaultSessionCode {
+		http.Error(w, "invalid or missing session code", http.StatusBadRequest)
 		return
 	}
 	room := h.getOrCreateRoom(code)
-	if room == nil {
-		http.Error(w, "room not found", http.StatusNotFound)
-		return
-	}
 
 	slog.Info("ws upgrading", "remote", r.RemoteAddr)
 	conn, err := h.Upgrader.Upgrade(w, r, nil)
@@ -170,15 +166,31 @@ func (h *Handler) readPump(ctx context.Context, conn *websocket.Conn, room *hub.
 			return
 		}
 		if messageType == websocket.TextMessage {
-			raw = injectSender(raw, peer.ID, peer.Name)
+			if !isStartFresh(raw) {
+				raw = injectSender(raw, peer.ID, peer.Name)
+			}
 		}
 		relay := h.copyForRelay(messageType, raw)
 		if relay == nil {
 			continue
 		}
-		room.Broadcast(peer.ID, relay, h.copyForBroadcast)
+		if messageType == websocket.TextMessage && isStartFresh(raw) {
+			room.BroadcastToAll(relay, h.copyForBroadcast)
+		} else {
+			room.Broadcast(peer.ID, relay, h.copyForBroadcast)
+		}
 		h.returnToPool(relay)
 	}
+}
+
+func isStartFresh(raw []byte) bool {
+	var env struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return false
+	}
+	return env.Type == protocol.TypeStartFresh
 }
 
 func injectSender(raw []byte, peerID, peerName string) []byte {

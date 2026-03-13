@@ -4,24 +4,24 @@ import { buildWsUrl } from './api'
 export type ConnectionState = 'closed' | 'connecting' | 'connected' | 'reconnecting'
 
 type Options = {
-  code: string | null
+  code: string
   onMessage: (data: string | ArrayBuffer) => void
-  reconnect?: boolean
 }
 
-export function useSocket({ code, onMessage, reconnect = true }: Options) {
+export function useSocket({ code, onMessage }: Options) {
   const [state, setState] = useState<ConnectionState>('closed')
   const wsRef = useRef<WebSocket | null>(null)
   const onMessageRef = useRef(onMessage)
-  const reconnectRef = useRef(reconnect)
   const codeRef = useRef(code)
+  const closingByCleanupRef = useRef(false)
+  const shouldReconnectRef = useRef(true)
 
   onMessageRef.current = onMessage
-  reconnectRef.current = reconnect
   codeRef.current = code
 
   const connect = useCallback(() => {
     if (!codeRef.current) return
+    closingByCleanupRef.current = false
     const url = buildWsUrl(codeRef.current)
     setState('connecting')
     const ws = new WebSocket(url)
@@ -30,9 +30,14 @@ export function useSocket({ code, onMessage, reconnect = true }: Options) {
 
     ws.onopen = () => setState('connected')
     ws.onclose = () => {
+      if (closingByCleanupRef.current) {
+        closingByCleanupRef.current = false
+        wsRef.current = null
+        return
+      }
       wsRef.current = null
       setState((s) => (s === 'connected' ? 'reconnecting' : 'closed'))
-      if (reconnectRef.current && codeRef.current) {
+      if (shouldReconnectRef.current && codeRef.current) {
         setTimeout(connect, 2000)
       }
     }
@@ -45,7 +50,7 @@ export function useSocket({ code, onMessage, reconnect = true }: Options) {
   }, [])
 
   const disconnect = useCallback(() => {
-    reconnectRef.current = false
+    shouldReconnectRef.current = false
     if (wsRef.current) {
       wsRef.current.close()
       wsRef.current = null
@@ -59,7 +64,7 @@ export function useSocket({ code, onMessage, reconnect = true }: Options) {
       wsRef.current = null
     }
     setState('closed')
-    reconnectRef.current = true
+    shouldReconnectRef.current = true
     connect()
   }, [connect])
 
@@ -71,16 +76,16 @@ export function useSocket({ code, onMessage, reconnect = true }: Options) {
 
   useEffect(() => {
     if (code) {
-      reconnectRef.current = true
+      shouldReconnectRef.current = true
       connect()
     }
     return () => {
-      reconnectRef.current = false
+      shouldReconnectRef.current = false
+      closingByCleanupRef.current = true
       if (wsRef.current) {
         wsRef.current.close()
         wsRef.current = null
       }
-      setState('closed')
     }
   }, [code, connect])
 

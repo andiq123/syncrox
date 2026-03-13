@@ -11,6 +11,7 @@ const (
 	TypeFileChunk     = "file_chunk"
 	TypeFileEnd       = "file_end"
 	TypeServerClosing = "server_closing"
+	TypeStartFresh    = "start_fresh"
 )
 
 const DefaultChunkSize = 512 * 1024

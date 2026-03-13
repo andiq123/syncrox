@@ -45,6 +45,21 @@ func (r *Room) Broadcast(excludeID string, data []byte, copyFn CopyFn) {
 	}
 }
 
+func (r *Room) BroadcastToAll(data []byte, copyFn CopyFn) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, p := range r.Peers {
+		payload := data
+		if copyFn != nil {
+			payload = copyFn(data)
+		}
+		select {
+		case p.Send <- payload:
+		case <-p.Ctx.Done():
+		}
+	}
+}
+
 func (r *Room) Add(p *Peer) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()

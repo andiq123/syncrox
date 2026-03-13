@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -34,14 +33,6 @@ func main() {
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write(healthOK)
-	})
-
-	mux.HandleFunc("GET /api/session", func(w http.ResponseWriter, r *http.Request) {
-		if !h.RoomExists(defaultSessionCode) {
-			h.CreateRoom(defaultSessionCode)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"code": defaultSessionCode})
 	})
 
 	mux.Handle("GET /ws", wsHandler)

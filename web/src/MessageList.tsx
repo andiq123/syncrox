@@ -93,31 +93,24 @@ function renderTextWithInlineCode(text: string, keyPrefix: string): ReactNode[] 
   return nodes.length > 0 ? nodes : [<span key={keyPrefix} className="message-text">{text}</span>]
 }
 
-function CodeBlock({
-  content,
-  variant = 'inline',
-  onCopy,
-}: {
-  content: string
-  variant?: 'inline' | 'standalone'
-  onCopy?: (text: string) => void
-}) {
-  const [copied, setCopied] = useState(false)
+function CodeBlock({ content, variant = 'inline' }: { content: string; variant?: 'inline' | 'standalone' }) {
+  const codeRef = useRef<HTMLElement>(null)
   const lines = content.split('\n')
   const showLineNumbers = lines.length > 1 || (lines.length === 1 && lines[0].length > 40)
 
-  useEffect(() => {
-    if (!copied) return
-    const t = setTimeout(() => setCopied(false), 2000)
-    return () => clearTimeout(t)
-  }, [copied])
-
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(content).then(() => {
-      setCopied(true)
-      onCopy?.(content)
-    })
-  }, [content, onCopy])
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+      const el = codeRef.current
+      if (!el) return
+      e.preventDefault()
+      const sel = window.getSelection()
+      if (!sel) return
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      sel.removeAllRanges()
+      sel.addRange(range)
+    }
+  }, [])
 
   return (
     <figure
@@ -125,6 +118,8 @@ function CodeBlock({
       role="figure"
       aria-label="Code block"
       data-line-numbers={showLineNumbers}
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
     >
       <header className="code-block__header">
         <span className="code-block__chrome" aria-hidden>
@@ -133,25 +128,6 @@ function CodeBlock({
           <span className="code-block__dot code-block__dot--green" />
         </span>
         <span className="code-block__title">Code</span>
-        <button
-          type="button"
-          className={`code-block__copy${copied ? ' code-block__copy--copied' : ''}`}
-          onClick={handleCopy}
-          aria-label={copied ? 'Copied' : 'Copy code'}
-          title={copied ? 'Copied' : 'Copy code'}
-        >
-          {copied ? (
-            <>
-              <span className="code-block__copy-icon" aria-hidden>✓</span>
-              <span>Copied!</span>
-            </>
-          ) : (
-            <>
-              <span className="code-block__copy-icon" aria-hidden>⎘</span>
-              <span>Copy code</span>
-            </>
-          )}
-        </button>
       </header>
       <div className="code-block__body">
         {showLineNumbers && (
@@ -163,8 +139,14 @@ function CodeBlock({
             ))}
           </div>
         )}
-        <pre className="code-block__pre">
-          <code className="code-block__code">
+        <pre
+          className="code-block__pre"
+          onMouseDown={(e) => {
+            const fig = (e.target as HTMLElement).closest('figure')
+            if (fig instanceof HTMLElement) fig.focus()
+          }}
+        >
+          <code ref={codeRef} className="code-block__code">
             {lines.map((line, i) => (
               <span key={i} className="code-block__line">
                 {line || '\u00A0'}
@@ -194,23 +176,61 @@ function MessageBody({ body }: { body: string }) {
   )
 }
 
+function copyToClipboard(plain: string): boolean {
+  const textarea = document.createElement('textarea')
+  textarea.value = plain
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  textarea.select()
+  try {
+    return document.execCommand('copy')
+  } finally {
+    document.body.removeChild(textarea)
+  }
+}
+
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
   useEffect(() => {
     if (!copied) return
-    const t = setTimeout(() => setCopied(false), 1500)
+    const t = setTimeout(() => setCopied(false), 2000)
     return () => clearTimeout(t)
   }, [copied])
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(text).then(() => setCopied(true))
+  const handleCopy = useCallback(async () => {
+    const plain = text.replace(/\r\n|\r|\n/g, '\r\n')
+    const clipboard = navigator.clipboard
+    if (clipboard) {
+      try {
+        if (clipboard.write) {
+          const html = `<pre><code>${text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')}</code></pre>`
+          await clipboard.write([
+            new ClipboardItem({ 'text/plain': new Blob([plain], { type: 'text/plain' }), 'text/html': new Blob([html], { type: 'text/html' }) }),
+          ])
+          setCopied(true)
+          return
+        }
+        await clipboard.writeText(plain)
+        setCopied(true)
+        return
+      } catch {
+        // fall through to execCommand
+      }
+    }
+    if (copyToClipboard(plain)) setCopied(true)
   }, [text])
   return (
     <button
       type="button"
       className={`message-copy-btn${copied ? ' copied' : ''}`}
       onClick={handleCopy}
-      aria-label={copied ? 'Copied' : 'Copy message'}
-      title={copied ? 'Copied' : 'Copy message'}
+      aria-label={copied ? 'Copied' : 'Copy'}
+      title={copied ? 'Copied' : 'Copy'}
     >
       {copied ? 'Copied' : 'Copy'}
     </button>

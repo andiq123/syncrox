@@ -11,6 +11,7 @@ import {
   type FileEndPayload,
   type JoinedPayload,
 } from './protocol'
+import { DEFAULT_SESSION_CODE } from './api'
 import { useSocket } from './useSocket'
 import { ConnectionStatus } from './ConnectionStatus'
 import { MessageList, type MessageItem } from './MessageList'
@@ -21,18 +22,26 @@ import { FileInput } from './FileInput'
 const COMPOSING_EXPIRE_MS = 800
 const SPEED_SAMPLE_INTERVAL_MS = 500
 
-function triggerDownload(blob: Blob, name: string): void {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = name
-  a.rel = 'noopener noreferrer'
-  a.style.display = 'none'
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  setTimeout(() => URL.revokeObjectURL(url), 200)
+function createDownloadTrigger(): (blob: Blob, name: string) => void {
+  let anchor: HTMLAnchorElement | null = null
+  let lastUrl: string | null = null
+  return (blob: Blob, name: string) => {
+    if (lastUrl) URL.revokeObjectURL(lastUrl)
+    const url = URL.createObjectURL(blob)
+    lastUrl = url
+    if (!anchor) {
+      anchor = document.createElement('a')
+      anchor.rel = 'noopener noreferrer'
+      anchor.style.display = 'none'
+      document.body.appendChild(anchor)
+    }
+    anchor.href = url
+    anchor.download = name
+    anchor.click()
+  }
 }
+
+const triggerDownload = createDownloadTrigger()
 
 type IncomingFile = {
   transferId: string
@@ -117,17 +126,13 @@ function buildBlobFromIncoming(
   const parts: Uint8Array[] = []
   for (const k of keys) {
     const part = refChunks.get(k) ?? stateChunks.get(k)
-    if (part?.length) parts.push(part)
+    if (part?.length) parts.push(part.slice(0))
   }
   if (parts.length === 0) return null
   return {
     blob: new Blob(parts, { type: file.mimeType || undefined }),
     name: file.name,
   }
-}
-
-type Props = {
-  sessionCode: string
 }
 
 function ConnectionErrorBanner({ message, onRetry }: { message: string; onRetry: () => void }) {
@@ -146,7 +151,7 @@ function ConnectionErrorBanner({ message, onRetry }: { message: string; onRetry:
   )
 }
 
-export function Transfer({ sessionCode }: Props) {
+export function Transfer() {
   const [messages, setMessages] = useState<MessageItem[]>([])
   const [incomingFiles, setIncomingFiles] = useState<Map<string, IncomingFile>>(new Map())
   const [outgoingFiles, setOutgoingFiles] = useState<Map<string, OutgoingFile>>(new Map())
@@ -164,6 +169,20 @@ export function Transfer({ sessionCode }: Props) {
   const incomingSnapshotRef = useRef<Map<string, IncomingFile>>(new Map())
   outgoingSnapshotRef.current = outgoingFiles
   incomingSnapshotRef.current = incomingFiles
+
+  const clearAllState = useCallback(() => {
+    setConnectionError(null)
+    setTransferSpeeds(new Map())
+    lastSampleRef.current = new Map()
+    setMessages([])
+    setIncomingFiles(new Map())
+    setOutgoingFiles(new Map())
+    incomingRef.current = new Map()
+    outgoingBlobsRef.current = new Map()
+    setPeerComposing(null)
+    if (composingTimeoutRef.current) clearTimeout(composingTimeoutRef.current)
+    composingTimeoutRef.current = null
+  }, [])
 
   const handleBinaryChunk = useCallback((raw: ArrayBuffer) => {
     const parsed = parseChunk(raw)
@@ -205,13 +224,14 @@ export function Transfer({ sessionCode }: Props) {
         setPeerName(p?.name ?? null)
         return
       }
-      case MessageType.PeerJoined:
-        return
       case MessageType.Error: {
         const p = e.payload as { message?: string }
         setConnectionError(p?.message ?? 'Connection error')
         return
       }
+      case MessageType.StartFresh:
+        clearAllState()
+        return
       case MessageType.Text: {
         const p = e.payload as TextPayload
         if (!p?.body) return
@@ -276,27 +296,19 @@ export function Transfer({ sessionCode }: Props) {
         return
     }
     },
-    [handleBinaryChunk],
+    [handleBinaryChunk, clearAllState],
   )
 
-  const { state, send, restart } = useSocket({ code: sessionCode, onMessage })
+  const { state, send, restart } = useSocket({ code: DEFAULT_SESSION_CODE, onMessage })
   const prevStateRef = useRef(state)
 
   const purgeSession = useCallback(() => {
-    setConnectionError(null)
-    setTransferSpeeds(new Map())
-    setPeerName(null)
-    lastSampleRef.current.clear()
-    setMessages([])
-    setIncomingFiles(new Map())
-    setOutgoingFiles(new Map())
-    incomingRef.current.clear()
-    outgoingBlobsRef.current.clear()
-    restart()
-  }, [restart])
+    clearAllState()
+    send(JSON.stringify({ type: MessageType.StartFresh }))
+  }, [clearAllState, send])
 
   useEffect(() => {
-    if (state === 'connected') setConnectionError(null)
+    if (state === 'connected' || state === 'connecting') setConnectionError(null)
   }, [state])
 
   useEffect(() => {
@@ -343,15 +355,18 @@ export function Transfer({ sessionCode }: Props) {
   }, [state])
 
   useEffect(() => {
-    const wasConnected = prevStateRef.current === 'connected'
+    const prev = prevStateRef.current
     prevStateRef.current = state
-    if (wasConnected && state !== 'connected') {
+    if (prev === 'connected' && state !== 'connected') {
       setMessages([])
       setIncomingFiles(new Map())
       setOutgoingFiles(new Map())
       setPeerName(null)
-      incomingRef.current.clear()
-      outgoingBlobsRef.current.clear()
+      incomingRef.current = new Map()
+      outgoingBlobsRef.current = new Map()
+    }
+    if (state === 'closed' && (prev === 'connecting' || prev === 'reconnecting')) {
+      setConnectionError('Connection failed. Check the server or try again.')
     }
   }, [state])
 
@@ -468,16 +483,11 @@ export function Transfer({ sessionCode }: Props) {
     [send, peerName],
   )
 
-  const downloadIncoming = useCallback(
-    (transferId: string) => {
-      const result = buildBlobFromIncoming(
-        incomingRef.current.get(transferId),
-        incomingFiles.get(transferId),
-      )
-      if (result) triggerDownload(result.blob, result.name)
-    },
-    [incomingFiles],
-  )
+  const downloadIncoming = useCallback((transferId: string) => {
+    const file = incomingRef.current.get(transferId)
+    const result = buildBlobFromIncoming(file, undefined)
+    if (result) triggerDownload(result.blob, result.name)
+  }, [])
 
   const downloadOutgoing = useCallback((transferId: string) => {
     const stored = outgoingBlobsRef.current.get(transferId)

@@ -9,6 +9,7 @@ export const MessageType = {
   FileChunk: 'file_chunk',
   FileEnd: 'file_end',
   ServerClosing: 'server_closing',
+  StartFresh: 'start_fresh',
 } as const
 
 export type Envelope = {
