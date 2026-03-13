@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { encodeChunk, parseChunk } from './chunkProtocol'
 import {
   MessageType,
@@ -18,6 +18,7 @@ import { FileList } from './FileList'
 import { FileInput } from './FileInput'
 
 const COMPOSING_EXPIRE_MS = 800
+const SPEED_SAMPLE_INTERVAL_MS = 500
 
 function triggerDownload(blob: Blob, name: string): void {
   const url = URL.createObjectURL(blob)
@@ -79,6 +80,60 @@ function makeIncomingFileEntry(
   }
 }
 
+function buildIncomingList(
+  incomingFiles: Map<string, IncomingFile>,
+  incomingRef: Map<string, IncomingFile>,
+  transferSpeeds: Map<string, number>,
+) {
+  return Array.from(incomingFiles.values()).map((f) => {
+    const receivedChunks = incomingRef.get(f.transferId)?.chunks.size ?? f.received
+    const receivedBytes = receivedChunks * ChunkSize
+    const progress = f.size ? Math.min(1, receivedBytes / f.size) : 1
+    return {
+      ...f,
+      done: f.done,
+      progress,
+      remaining: Math.max(0, f.size - receivedBytes),
+      speed: transferSpeeds.get(f.transferId),
+    }
+  })
+}
+
+function buildOutgoingList(
+  outgoingFiles: Map<string, OutgoingFile>,
+  transferSpeeds: Map<string, number>,
+) {
+  return Array.from(outgoingFiles.values()).map((f) => {
+    const sentBytes = f.sent * ChunkSize
+    return {
+      ...f,
+      remaining: Math.max(0, f.size - sentBytes),
+      speed: transferSpeeds.get(f.transferId),
+    }
+  })
+}
+
+function buildBlobFromIncoming(
+  fileRef: IncomingFile | undefined,
+  fileState: IncomingFile | undefined,
+): { blob: Blob; name: string } | null {
+  const file = fileRef ?? fileState
+  if (!file?.done) return null
+  const refChunks = fileRef?.chunks ?? new Map<number, Uint8Array>()
+  const stateChunks = fileState?.chunks ?? new Map<number, Uint8Array>()
+  const keys = Array.from(new Set([...refChunks.keys(), ...stateChunks.keys()])).sort((a, b) => a - b)
+  const parts: Uint8Array[] = []
+  for (const k of keys) {
+    const part = refChunks.get(k) ?? stateChunks.get(k)
+    if (part?.length) parts.push(part)
+  }
+  if (parts.length === 0) return null
+  return {
+    blob: new Blob(parts, { type: file.mimeType || undefined }),
+    name: file.name,
+  }
+}
+
 type Props = {
   sessionCode: string
 }
@@ -102,30 +157,35 @@ export function Transfer({ sessionCode }: Props) {
   outgoingSnapshotRef.current = outgoingFiles
   incomingSnapshotRef.current = incomingFiles
 
-  const onMessage = useCallback((raw: string | ArrayBuffer) => {
-    if (raw instanceof ArrayBuffer) {
-      const parsed = parseChunk(raw)
-      if (!parsed) return
-      const { transferId, index, data } = parsed
-      setIncomingFiles((prev) => {
-        const file = prev.get(transferId)
-        if (!file) return prev
-        const next = new Map(prev)
-        const nextFile = { ...file, chunks: new Map(file.chunks) }
-        nextFile.chunks.set(index, data)
-        nextFile.received = nextFile.chunks.size
-        next.set(transferId, nextFile)
-        return next
-      })
-      const f = incomingRef.current.get(transferId)
-      if (f) {
-        f.chunks.set(index, data)
-        f.received = f.chunks.size
-      }
-      return
+  const handleBinaryChunk = useCallback((raw: ArrayBuffer) => {
+    const parsed = parseChunk(raw)
+    if (!parsed) return
+    const { transferId, index, data } = parsed
+    setIncomingFiles((prev) => {
+      const file = prev.get(transferId)
+      if (!file) return prev
+      const next = new Map(prev)
+      const nextFile = { ...file, chunks: new Map(file.chunks) }
+      nextFile.chunks.set(index, data)
+      nextFile.received = nextFile.chunks.size
+      next.set(transferId, nextFile)
+      return next
+    })
+    const refFile = incomingRef.current.get(transferId)
+    if (refFile) {
+      refFile.chunks.set(index, data)
+      refFile.received = refFile.chunks.size
     }
+  }, [])
 
-    let e: Envelope
+  const onMessage = useCallback(
+    (raw: string | ArrayBuffer) => {
+      if (raw instanceof ArrayBuffer) {
+        handleBinaryChunk(raw)
+        return
+      }
+
+      let e: Envelope
     try {
       e = JSON.parse(raw as string) as Envelope
     } catch {
@@ -207,7 +267,9 @@ export function Transfer({ sessionCode }: Props) {
       default:
         return
     }
-  }, [])
+    },
+    [handleBinaryChunk],
+  )
 
   const { state, send, restart } = useSocket({ code: sessionCode, onMessage })
   const prevStateRef = useRef(state)
@@ -268,7 +330,7 @@ export function Transfer({ sessionCode }: Props) {
         next.forEach((v, k) => m.set(k, v))
         return m
       })
-    }, 500)
+    }, SPEED_SAMPLE_INTERVAL_MS)
     return () => clearInterval(interval)
   }, [state])
 
@@ -398,24 +460,16 @@ export function Transfer({ sessionCode }: Props) {
     [send, peerName],
   )
 
-  const downloadIncoming = useCallback((transferId: string) => {
-    const fileRef = incomingRef.current.get(transferId)
-    const fileState = incomingFiles.get(transferId)
-    const file = fileRef ?? fileState
-    if (!file || !file.done) return
-    const refChunks = fileRef?.chunks ?? new Map<number, Uint8Array>()
-    const stateChunks = fileState?.chunks ?? new Map<number, Uint8Array>()
-    const allKeys = new Set([...refChunks.keys(), ...stateChunks.keys()])
-    const keys = Array.from(allKeys).sort((a, b) => a - b)
-    const parts: Uint8Array[] = []
-    for (const k of keys) {
-      const part = refChunks.get(k) ?? stateChunks.get(k)
-      if (part?.length) parts.push(part)
-    }
-    if (parts.length === 0) return
-    const blob = new Blob(parts, { type: file.mimeType || undefined })
-    triggerDownload(blob, file.name)
-  }, [incomingFiles])
+  const downloadIncoming = useCallback(
+    (transferId: string) => {
+      const result = buildBlobFromIncoming(
+        incomingRef.current.get(transferId),
+        incomingFiles.get(transferId),
+      )
+      if (result) triggerDownload(result.blob, result.name)
+    },
+    [incomingFiles],
+  )
 
   const downloadOutgoing = useCallback((transferId: string) => {
     const stored = outgoingBlobsRef.current.get(transferId)
@@ -449,32 +503,21 @@ export function Transfer({ sessionCode }: Props) {
     [sendFile, state],
   )
 
-  const incomingList = Array.from(incomingFiles.values()).map((f) => {
-    const receivedChunks = incomingRef.current.get(f.transferId)?.chunks.size ?? f.received
-    const receivedBytes = receivedChunks * ChunkSize
-    const progress = f.size ? Math.min(1, receivedBytes / f.size) : 1
-    const remaining = Math.max(0, f.size - receivedBytes)
-    return {
-      ...f,
-      done: f.done,
-      progress,
-      remaining,
-      speed: transferSpeeds.get(f.transferId),
-    }
-  })
-  const outgoingList = Array.from(outgoingFiles.values()).map((f) => {
-    const sentBytes = f.sent * ChunkSize
-    const remaining = Math.max(0, f.size - sentBytes)
-    return {
-      ...f,
-      remaining,
-      speed: transferSpeeds.get(f.transferId),
-    }
-  })
+  const incomingList = useMemo(
+    () => buildIncomingList(incomingFiles, incomingRef.current, transferSpeeds),
+    [incomingFiles, transferSpeeds],
+  )
+  const outgoingList = useMemo(
+    () => buildOutgoingList(outgoingFiles, transferSpeeds),
+    [outgoingFiles, transferSpeeds],
+  )
 
   return (
     <div className="transfer">
-      <header className="transfer-header">
+      <a href="#transfer-main" className="skip-link">
+        Skip to main content
+      </a>
+      <header className="transfer-header" role="banner">
         <ConnectionStatus state={state} peerName={peerName} />
         <button
           type="button"
@@ -487,22 +530,28 @@ export function Transfer({ sessionCode }: Props) {
       </header>
 
       {connectionError && (
-        <div className="transfer-error" role="alert">
+        <div className="transfer-error" role="alert" aria-live="assertive">
           {connectionError}
         </div>
       )}
 
-      <main className="transfer-main">
-        <section className="transfer-section transfer-section--messages" aria-label="Messages">
+      <main id="transfer-main" className="transfer-main" role="main">
+        <section
+          className="transfer-section transfer-section--messages"
+          aria-labelledby="messages-heading"
+        >
+          <h2 id="messages-heading" className="sr-only">
+            Messages
+          </h2>
           <div className="section-inner">
             <div className="section-body section-body--messages">
               <MessageList messages={messages} />
             </div>
-            {peerComposing && (
-              <p className="typing-indicator" aria-live="polite">
-                {peerComposing.name} is typing…
-              </p>
-            )}
+            <div className="typing-indicator-slot" aria-live="polite">
+              {peerComposing ? (
+                <p className="typing-indicator">{peerComposing.name} is typing…</p>
+              ) : null}
+            </div>
             <div className="section-footer">
               <MessageInput
                 onSend={sendText}
@@ -515,11 +564,14 @@ export function Transfer({ sessionCode }: Props) {
 
         <section
           className={`transfer-section transfer-section--files ${isDragging ? 'transfer-section--dragging' : ''}`}
-          aria-label="Files"
+          aria-labelledby="files-heading"
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
+          <h2 id="files-heading" className="sr-only">
+            Files
+          </h2>
           {isDragging && (
             <div className="file-drop-overlay" aria-hidden>
               Drop files here

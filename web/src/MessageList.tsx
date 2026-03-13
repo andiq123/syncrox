@@ -42,10 +42,27 @@ function looksLikePastedCode(text: string): boolean {
 
 function isCodeOnlyMessage(body: string): boolean {
   const segments = parseMessageSegments(body)
-  if (segments.length === 1 && segments[0].type === 'code') return true
-  if (segments.length === 1 && segments[0].type === 'text')
-    return looksLikePastedCode(segments[0].content)
-  return false
+  if (segments.length !== 1) return false
+  if (segments[0].type === 'code') return true
+  return looksLikePastedCode(segments[0].content)
+}
+
+function formatSenderDisplay(name: string): string {
+  return name.replace(/_/g, ' ')
+}
+
+function getMessageItemClassName(
+  direction: string,
+  body: string,
+  codeOnly: boolean,
+  enteringId: string | null,
+  id: string,
+): string {
+  const parts = [`message-item`, `message-item--${direction}`]
+  if (codeOnly) parts.push('message-item--code-only')
+  else if (body.includes('```')) parts.push('message-item--has-code')
+  if (enteringId === id) parts.push('message-item--enter')
+  return parts.join(' ')
 }
 
 function renderTextWithInlineCode(text: string, keyPrefix: string): ReactNode[] {
@@ -238,16 +255,17 @@ export function MessageList({ messages }: Props) {
             const codeOnly = isCodeOnlyMessage(m.body)
             const segments = parseMessageSegments(m.body)
             const copyText = codeOnly ? (segments[0] as Segment).content : m.body
+            const senderDisplay = m.senderName ? formatSenderDisplay(m.senderName) : null
             return (
               <li
                 key={m.id}
-                className={`message-item message-item--${m.direction}${codeOnly ? ' message-item--code-only' : m.body.includes('```') ? ' message-item--has-code' : ''}${enteringId === m.id ? ' message-item--enter' : ''}`}
+                className={getMessageItemClassName(m.direction, m.body, codeOnly, enteringId, m.id)}
                 data-direction={m.direction}
               >
                 <div className="message-item-content">
-                  {m.senderName && (
-                    <span className="message-sender" aria-label={`From ${m.senderName.replace(/_/g, ' ')}`}>
-                      {m.senderName.replace(/_/g, ' ')}:
+                  {senderDisplay && (
+                    <span className="message-sender" aria-label={`From ${senderDisplay}`}>
+                      {senderDisplay}:
                     </span>
                   )}
                   {codeOnly ? (

@@ -98,28 +98,29 @@ function FileListItem({
   entering,
 }: FileListItemProps) {
   const showSpeed = !done && speed != null && speed > 0
-  const showRemaining = !done && remaining > 0
+  const remainingText = !done && remaining > 0 ? formatRemaining(remaining) : null
+  const senderDisplay = senderName ? formatSender(senderName) : null
 
   return (
     <li className={`file-item file-item--${direction}${entering ? ' file-item--enter' : ''}`}>
       <FileIcon />
       <div className="file-item-info">
         <span className="file-item-name">{name}</span>
-        {senderName && (
-          <span className="file-item-sender" aria-label={`From ${formatSender(senderName)}`}>
-            from {formatSender(senderName)}
+        {senderDisplay && (
+          <span className="file-item-sender" aria-label={`From ${senderDisplay}`}>
+            from {senderDisplay}
           </span>
         )}
         <div className="file-item-meta" aria-live="polite">
           <span className="file-item-size">{formatSize(size)}</span>
-          {showRemaining && (
-            <span className="file-item-remaining" aria-label={formatRemaining(remaining)}>
-              {formatRemaining(remaining)}
+          {remainingText != null && (
+            <span className="file-item-remaining" aria-label={remainingText}>
+              {remainingText}
             </span>
           )}
           {showSpeed && (
-            <span className="file-item-speed" aria-label={`Speed ${formatSpeed(speed)}`}>
-              {formatSpeed(speed)}
+            <span className="file-item-speed" aria-label={`Speed ${formatSpeed(speed!)}`}>
+              {formatSpeed(speed!)}
             </span>
           )}
         </div>

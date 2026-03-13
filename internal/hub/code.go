@@ -3,10 +3,13 @@ package hub
 import (
 	"crypto/rand"
 	"fmt"
+	"strings"
 )
 
-const codeLen = 6
-const codeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+const (
+	codeLen      = 6
+	codeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+)
 
 func GenerateRoomCode() (string, error) {
 	b := make([]byte, codeLen)
@@ -23,19 +26,10 @@ func ValidateRoomCode(code string) bool {
 	if len(code) != codeLen {
 		return false
 	}
-	for _, c := range code {
-		if !containsRune(codeAlphabet, c) {
+	for _, r := range code {
+		if !strings.ContainsRune(codeAlphabet, r) {
 			return false
 		}
 	}
 	return true
-}
-
-func containsRune(s string, r rune) bool {
-	for _, c := range s {
-		if c == r {
-			return true
-		}
-	}
-	return false
 }
