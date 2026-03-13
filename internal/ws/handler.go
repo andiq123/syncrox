@@ -187,7 +187,9 @@ func injectSender(raw []byte, peerID, peerName string) []byte {
 		return raw
 	}
 	typ, _ := env["type"].(string)
-	if typ != protocol.TypeText && typ != protocol.TypeFileStart && typ != protocol.TypeFileEnd {
+	switch typ {
+	case protocol.TypeText, protocol.TypeFileStart, protocol.TypeFileEnd, protocol.TypeComposing:
+	default:
 		return raw
 	}
 	payload, ok := env["payload"].(map[string]any)

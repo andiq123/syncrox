@@ -6,6 +6,7 @@ const (
 	TypePeerJoined    = "peer_joined"
 	TypeError         = "error"
 	TypeText          = "text"
+	TypeComposing     = "composing"
 	TypeFileStart     = "file_start"
 	TypeFileChunk     = "file_chunk"
 	TypeFileEnd       = "file_end"
@@ -45,6 +46,10 @@ type ErrorPayload struct {
 
 type TextPayload struct {
 	Body string `json:"body"`
+}
+
+type ComposingPayload struct {
+	Active bool `json:"active"`
 }
 
 type FileStartPayload struct {

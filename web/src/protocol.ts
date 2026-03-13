@@ -4,6 +4,7 @@ export const MessageType = {
   PeerJoined: 'peer_joined',
   Error: 'error',
   Text: 'text',
+  Composing: 'composing',
   FileStart: 'file_start',
   FileChunk: 'file_chunk',
   FileEnd: 'file_end',
@@ -34,5 +35,6 @@ export type PeerInfo = { peer_id: string; name: string }
 export type JoinedPayload = { code: string; name?: string; peers?: PeerInfo[] }
 export type PeerJoinedPayload = { peer_id: string; name: string }
 export type TextPayload = { body: string; sender_id?: string; sender_name?: string }
+export type ComposingPayload = { active: boolean; sender_id?: string; sender_name?: string }
 
 export const ChunkSize = 512 * 1024

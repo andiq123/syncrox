@@ -5,6 +5,7 @@ import {
   ChunkSize,
   type Envelope,
   type TextPayload,
+  type ComposingPayload,
   type FileStartPayload,
   type FileEndPayload,
   type JoinedPayload,
@@ -15,6 +16,8 @@ import { MessageList } from './MessageList'
 import { MessageInput } from './MessageInput'
 import { FileList } from './FileList'
 import { FileInput } from './FileInput'
+
+const COMPOSING_EXPIRE_MS = 800
 
 function triggerDownload(blob: Blob, name: string): void {
   const url = URL.createObjectURL(blob)
@@ -91,6 +94,8 @@ export function Transfer({ sessionCode }: Props) {
   const outgoingBlobsRef = useRef<Map<string, { name: string; blob: Blob }>>(new Map())
   const [transferSpeeds, setTransferSpeeds] = useState<Map<string, number>>(new Map())
   const [peerName, setPeerName] = useState<string | null>(null)
+  const [peerComposing, setPeerComposing] = useState<{ name: string } | null>(null)
+  const composingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSampleRef = useRef<Map<string, { bytes: number; time: number }>>(new Map())
   const outgoingSnapshotRef = useRef<Map<string, OutgoingFile>>(new Map())
   const incomingSnapshotRef = useRef<Map<string, IncomingFile>>(new Map())
@@ -142,6 +147,7 @@ export function Transfer({ sessionCode }: Props) {
       case MessageType.Text: {
         const p = e.payload as TextPayload
         if (!p?.body) return
+        setPeerComposing(null)
         setMessages((prev) => [
           ...prev,
           {
@@ -152,6 +158,18 @@ export function Transfer({ sessionCode }: Props) {
             senderName: p.sender_name ?? null,
           },
         ])
+        return
+      }
+      case MessageType.Composing: {
+        const p = e.payload as ComposingPayload
+        if (!p?.active) {
+          setPeerComposing(null)
+          return
+        }
+        if (composingTimeoutRef.current) clearTimeout(composingTimeoutRef.current)
+        const name = (p.sender_name ?? 'Someone').replace(/_/g, ' ')
+        setPeerComposing({ name })
+        composingTimeoutRef.current = setTimeout(() => setPeerComposing(null), COMPOSING_EXPIRE_MS)
         return
       }
       case MessageType.FileStart: {
@@ -267,9 +285,21 @@ export function Transfer({ sessionCode }: Props) {
     }
   }, [state])
 
+  useEffect(() => () => {
+    if (composingTimeoutRef.current) clearTimeout(composingTimeoutRef.current)
+  }, [])
+
+  const sendComposing = useCallback(
+    (active: boolean) => {
+      send(JSON.stringify({ type: MessageType.Composing, payload: { active } }))
+    },
+    [send],
+  )
+
   const sendText = useCallback(
     (body: string) => {
       if (!body.trim()) return
+      sendComposing(false)
       send(JSON.stringify({ type: MessageType.Text, payload: { body: body.trim() } }))
       setMessages((prev) => [
         ...prev,
@@ -282,7 +312,7 @@ export function Transfer({ sessionCode }: Props) {
         },
       ])
     },
-    [send, peerName],
+    [send, sendComposing, peerName],
   )
 
   const sendFile = useCallback(
@@ -463,9 +493,24 @@ export function Transfer({ sessionCode }: Props) {
       )}
 
       <main className="transfer-main">
-        <section className="transfer-section" aria-label="Messages">
-          <MessageList messages={messages} />
-          <MessageInput onSend={sendText} disabled={state !== 'connected'} />
+        <section className="transfer-section transfer-section--messages" aria-label="Messages">
+          <div className="section-inner">
+            <div className="section-body section-body--messages">
+              <MessageList messages={messages} />
+            </div>
+            {peerComposing && (
+              <p className="typing-indicator" aria-live="polite">
+                {peerComposing.name} is typing…
+              </p>
+            )}
+            <div className="section-footer">
+              <MessageInput
+                onSend={sendText}
+                onComposingChange={sendComposing}
+                disabled={state !== 'connected'}
+              />
+            </div>
+          </div>
         </section>
 
         <section
@@ -480,14 +525,20 @@ export function Transfer({ sessionCode }: Props) {
               Drop files here
             </div>
           )}
-          <FileList
-            incoming={incomingList}
-            outgoing={outgoingList}
-            chunkSize={ChunkSize}
-            onDownloadIncoming={downloadIncoming}
-            onDownloadOutgoing={downloadOutgoing}
-          />
-          <FileInput onSend={sendFile} disabled={state !== 'connected'} />
+          <div className="section-inner">
+            <div className="section-body section-body--files">
+              <FileList
+                incoming={incomingList}
+                outgoing={outgoingList}
+                chunkSize={ChunkSize}
+                onDownloadIncoming={downloadIncoming}
+                onDownloadOutgoing={downloadOutgoing}
+              />
+            </div>
+            <div className="section-footer">
+              <FileInput onSend={sendFile} disabled={state !== 'connected'} />
+            </div>
+          </div>
         </section>
       </main>
     </div>

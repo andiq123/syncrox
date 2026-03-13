@@ -1,3 +1,5 @@
+import { useRef, useState, useEffect } from 'react'
+
 type Incoming = {
   transferId: string
   name: string
@@ -27,6 +29,8 @@ type Props = {
   onDownloadIncoming: (transferId: string) => void
   onDownloadOutgoing: (transferId: string) => void
 }
+
+const FILE_ENTER_ANIMATION_MS = 280
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -72,6 +76,7 @@ type FileListItemProps = {
   progressMax: number
   progressAriaLabel: string
   onDownload: () => void
+  entering?: boolean
 }
 
 function formatSender(senderName: string): string {
@@ -90,12 +95,13 @@ function FileListItem({
   progressMax,
   progressAriaLabel,
   onDownload,
+  entering,
 }: FileListItemProps) {
   const showSpeed = !done && speed != null && speed > 0
   const showRemaining = !done && remaining > 0
 
   return (
-    <li className={`file-item file-item--${direction}`}>
+    <li className={`file-item file-item--${direction}${entering ? ' file-item--enter' : ''}`}>
       <FileIcon />
       <div className="file-item-info">
         <span className="file-item-name">{name}</span>
@@ -142,6 +148,25 @@ export function FileList({
   onDownloadOutgoing,
 }: Props) {
   const hasFiles = incoming.length > 0 || outgoing.length > 0
+  const prevIdsRef = useRef<Set<string>>(new Set())
+  const [enteringIds, setEnteringIds] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    const current = new Set([
+      ...outgoing.map((o) => o.transferId),
+      ...incoming.map((i) => i.transferId),
+    ])
+    const prev = prevIdsRef.current
+    const added = new Set([...current].filter((id) => !prev.has(id)))
+    if (added.size > 0) setEnteringIds(added)
+    prevIdsRef.current = current
+  }, [incoming, outgoing])
+
+  useEffect(() => {
+    if (enteringIds.size === 0) return
+    const t = setTimeout(() => setEnteringIds(new Set()), FILE_ENTER_ANIMATION_MS)
+    return () => clearTimeout(t)
+  }, [enteringIds])
 
   return (
     <div className="file-list">
@@ -166,6 +191,7 @@ export function FileList({
               progressMax={f.size}
               progressAriaLabel={`Sending ${f.name}, ${formatRemaining(f.remaining)}`}
               onDownload={() => onDownloadOutgoing(f.transferId)}
+              entering={enteringIds.has(f.transferId)}
             />
           ))}
           {incoming.map((f) => (
@@ -182,6 +208,7 @@ export function FileList({
               progressMax={f.size}
               progressAriaLabel={`Receiving ${f.name}, ${formatRemaining(f.remaining)}`}
               onDownload={() => onDownloadIncoming(f.transferId)}
+              entering={enteringIds.has(f.transferId)}
             />
           ))}
         </ul>
