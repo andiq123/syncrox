@@ -25,14 +25,15 @@ func main() {
 		port = "5090"
 	}
 	h := hub.New()
-	const defaultSessionCode = "DEFALT"
+	const defaultSessionCode = "DEFAULT"
 	wsHandler := ws.NewHandler(h, nil, defaultSessionCode)
 
 	mux := http.NewServeMux()
 
+	var healthOK = []byte("ok")
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		w.Write(healthOK)
 	})
 
 	mux.HandleFunc("GET /api/session", func(w http.ResponseWriter, r *http.Request) {

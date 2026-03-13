@@ -38,3 +38,7 @@ export type TextPayload = { body: string; sender_id?: string; sender_name?: stri
 export type ComposingPayload = { active: boolean; sender_id?: string; sender_name?: string }
 
 export const ChunkSize = 512 * 1024
+
+export function formatSenderName(name: string): string {
+  return name.replace(/_/g, ' ')
+}

@@ -31,5 +31,3 @@ export function parseChunk(buffer: ArrayBuffer): { transferId: string; index: nu
   data.set(new Uint8Array(buffer, dataStart))
   return { transferId, index, data }
 }
-
-export const CHUNK_HEADER_MAX_BYTES = 64

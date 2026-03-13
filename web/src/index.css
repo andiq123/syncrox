@@ -208,10 +208,16 @@ a {
 .app-loading {
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 1rem;
   color: var(--text-muted);
   font-size: 0.875rem;
+}
+
+.app-loading-retry {
+  margin-top: 0.25rem;
 }
 
 .btn {
@@ -343,11 +349,30 @@ a {
 }
 
 .transfer-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
   padding: 0.5rem var(--space-card);
   background: rgba(248, 113, 113, 0.1);
   color: var(--error);
   font-size: 0.8125rem;
   border-bottom: 1px solid var(--border);
+}
+
+.transfer-error-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.transfer-error-retry {
+  flex-shrink: 0;
+  color: var(--error);
+}
+
+.transfer-error-retry:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .connection-status {

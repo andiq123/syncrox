@@ -1,6 +1,7 @@
 import { useState, useCallback, useLayoutEffect, useRef, useEffect, type ReactNode } from 'react'
+import { formatSenderName } from './protocol'
 
-type MessageItem = {
+export type MessageItem = {
   id: string
   body: string
   at: number
@@ -45,10 +46,6 @@ function isCodeOnlyMessage(body: string): boolean {
   if (segments.length !== 1) return false
   if (segments[0].type === 'code') return true
   return looksLikePastedCode(segments[0].content)
-}
-
-function formatSenderDisplay(name: string): string {
-  return name.replace(/_/g, ' ')
 }
 
 function getMessageItemClassName(
@@ -255,7 +252,7 @@ export function MessageList({ messages }: Props) {
             const codeOnly = isCodeOnlyMessage(m.body)
             const segments = parseMessageSegments(m.body)
             const copyText = codeOnly ? (segments[0] as Segment).content : m.body
-            const senderDisplay = m.senderName ? formatSenderDisplay(m.senderName) : null
+            const senderDisplay = m.senderName ? formatSenderName(m.senderName) : null
             return (
               <li
                 key={m.id}

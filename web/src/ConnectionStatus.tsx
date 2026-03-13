@@ -1,4 +1,5 @@
 import type { ConnectionState } from './useSocket'
+import { formatSenderName } from './protocol'
 
 type Props = {
   state: ConnectionState
@@ -8,7 +9,7 @@ type Props = {
 function statusLabel(state: ConnectionState, peerName: string | null | undefined): string {
   switch (state) {
     case 'connected':
-      return peerName ? `Connected as ${peerName.replace(/_/g, ' ')}` : 'Connected'
+      return peerName ? `Connected as ${formatSenderName(peerName)}` : 'Connected'
     case 'connecting':
     case 'reconnecting':
       return 'Connecting…'

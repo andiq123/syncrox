@@ -3,6 +3,7 @@ import { encodeChunk, parseChunk } from './chunkProtocol'
 import {
   MessageType,
   ChunkSize,
+  formatSenderName,
   type Envelope,
   type TextPayload,
   type ComposingPayload,
@@ -12,7 +13,7 @@ import {
 } from './protocol'
 import { useSocket } from './useSocket'
 import { ConnectionStatus } from './ConnectionStatus'
-import { MessageList } from './MessageList'
+import { MessageList, type MessageItem } from './MessageList'
 import { MessageInput } from './MessageInput'
 import { FileList } from './FileList'
 import { FileInput } from './FileInput'
@@ -31,14 +32,6 @@ function triggerDownload(blob: Blob, name: string): void {
   a.click()
   document.body.removeChild(a)
   setTimeout(() => URL.revokeObjectURL(url), 200)
-}
-
-type MessageItem = {
-  id: string
-  body: string
-  at: number
-  direction: 'out' | 'in'
-  senderName?: string | null
 }
 
 type IncomingFile = {
@@ -91,7 +84,6 @@ function buildIncomingList(
     const progress = f.size ? Math.min(1, receivedBytes / f.size) : 1
     return {
       ...f,
-      done: f.done,
       progress,
       remaining: Math.max(0, f.size - receivedBytes),
       speed: transferSpeeds.get(f.transferId),
@@ -136,6 +128,22 @@ function buildBlobFromIncoming(
 
 type Props = {
   sessionCode: string
+}
+
+function ConnectionErrorBanner({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="transfer-error" role="alert" aria-live="assertive">
+      <span className="transfer-error-text">{message}</span>
+      <button
+        type="button"
+        className="btn btn-ghost btn-small transfer-error-retry"
+        onClick={onRetry}
+        aria-label="Retry connection"
+      >
+        Retry
+      </button>
+    </div>
+  )
 }
 
 export function Transfer({ sessionCode }: Props) {
@@ -186,12 +194,12 @@ export function Transfer({ sessionCode }: Props) {
       }
 
       let e: Envelope
-    try {
-      e = JSON.parse(raw as string) as Envelope
-    } catch {
-      return
-    }
-    switch (e.type) {
+      try {
+        e = JSON.parse(raw as string) as Envelope
+      } catch {
+        return
+      }
+      switch (e.type) {
       case MessageType.Joined: {
         const p = e.payload as JoinedPayload
         setPeerName(p?.name ?? null)
@@ -227,7 +235,7 @@ export function Transfer({ sessionCode }: Props) {
           return
         }
         if (composingTimeoutRef.current) clearTimeout(composingTimeoutRef.current)
-        const name = (p.sender_name ?? 'Someone').replace(/_/g, ' ')
+        const name = formatSenderName(p.sender_name ?? 'Someone')
         setPeerComposing({ name })
         composingTimeoutRef.current = setTimeout(() => setPeerComposing(null), COMPOSING_EXPIRE_MS)
         return
@@ -512,8 +520,14 @@ export function Transfer({ sessionCode }: Props) {
     [outgoingFiles, transferSpeeds],
   )
 
+  const preventFileDragDefault = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes('Files')) {
+      e.preventDefault()
+    }
+  }, [])
+
   return (
-    <div className="transfer">
+    <div className="transfer" onDragOver={preventFileDragDefault}>
       <a href="#transfer-main" className="skip-link">
         Skip to main content
       </a>
@@ -530,9 +544,7 @@ export function Transfer({ sessionCode }: Props) {
       </header>
 
       {connectionError && (
-        <div className="transfer-error" role="alert" aria-live="assertive">
-          {connectionError}
-        </div>
+        <ConnectionErrorBanner message={connectionError} onRetry={restart} />
       )}
 
       <main id="transfer-main" className="transfer-main" role="main">

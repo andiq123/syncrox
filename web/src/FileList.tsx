@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect } from 'react'
+import { formatSenderName } from './protocol'
 
 type Incoming = {
   transferId: string
@@ -50,6 +51,15 @@ function formatRemaining(bytes: number): string {
   return `${formatSize(bytes)} left`
 }
 
+function progressAriaLabelFor(
+  action: 'Sending' | 'Receiving',
+  name: string,
+  remaining: number,
+): string {
+  if (remaining <= 0) return `${action} ${name}`
+  return `${action} ${name}, ${formatRemaining(remaining)}`
+}
+
 function FileIcon() {
   return (
     <div className="file-item-icon" aria-hidden>
@@ -79,10 +89,6 @@ type FileListItemProps = {
   entering?: boolean
 }
 
-function formatSender(senderName: string): string {
-  return senderName.replace(/_/g, ' ')
-}
-
 function FileListItem({
   name,
   size,
@@ -99,7 +105,7 @@ function FileListItem({
 }: FileListItemProps) {
   const showSpeed = !done && speed != null && speed > 0
   const remainingText = !done && remaining > 0 ? formatRemaining(remaining) : null
-  const senderDisplay = senderName ? formatSender(senderName) : null
+  const senderDisplay = senderName ? formatSenderName(senderName) : null
 
   return (
     <li className={`file-item file-item--${direction}${entering ? ' file-item--enter' : ''}`}>
@@ -190,7 +196,7 @@ export function FileList({
               direction="out"
               progressValue={f.sent * chunkSize}
               progressMax={f.size}
-              progressAriaLabel={`Sending ${f.name}, ${formatRemaining(f.remaining)}`}
+              progressAriaLabel={progressAriaLabelFor('Sending', f.name, f.remaining)}
               onDownload={() => onDownloadOutgoing(f.transferId)}
               entering={enteringIds.has(f.transferId)}
             />
@@ -207,7 +213,7 @@ export function FileList({
               direction="in"
               progressValue={f.progress * f.size}
               progressMax={f.size}
-              progressAriaLabel={`Receiving ${f.name}, ${formatRemaining(f.remaining)}`}
+              progressAriaLabel={progressAriaLabelFor('Receiving', f.name, f.remaining)}
               onDownload={() => onDownloadIncoming(f.transferId)}
               entering={enteringIds.has(f.transferId)}
             />

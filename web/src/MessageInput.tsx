@@ -72,10 +72,8 @@ export function MessageInput({ onSend, onComposingChange, disabled }: Props) {
         onKeyDown={onKeyDown}
         disabled={disabled}
         rows={2}
-        aria-describedby="message-send-hint"
       />
       <button
-        id="message-send-hint"
         type="button"
         className="btn btn-primary"
         onClick={submit}
