@@ -19,9 +19,11 @@ tmp/
 temp/
 .cache/
 
-# OS junk
+# OS junk (never commit)
 .DS_Store
 .DS_Store?
+**/.DS_Store
+**/.DS_Store?
 ._*
 Thumbs.db
 ehthumbs.db

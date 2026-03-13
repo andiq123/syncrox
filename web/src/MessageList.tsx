@@ -28,9 +28,24 @@ function parseMessageSegments(body: string): Segment[] {
   return segments
 }
 
+function looksLikePastedCode(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  const lines = trimmed.split('\n')
+  if (lines.length >= 2) return true
+  if (lines.length === 1 && trimmed.length > 50) {
+    const codeLike = /[=(){}$;]|\/\/|\/\*|^#|^\/|^\$|=>|<-|def |function |const |let |var |import |export /
+    return codeLike.test(trimmed)
+  }
+  return false
+}
+
 function isCodeOnlyMessage(body: string): boolean {
   const segments = parseMessageSegments(body)
-  return segments.length === 1 && segments[0].type === 'code'
+  if (segments.length === 1 && segments[0].type === 'code') return true
+  if (segments.length === 1 && segments[0].type === 'text')
+    return looksLikePastedCode(segments[0].content)
+  return false
 }
 
 function renderTextWithInlineCode(text: string, keyPrefix: string): ReactNode[] {
@@ -64,17 +79,87 @@ function renderTextWithInlineCode(text: string, keyPrefix: string): ReactNode[] 
   return nodes.length > 0 ? nodes : [<span key={keyPrefix} className="message-text">{text}</span>]
 }
 
-function CodeBlock({ content }: { content: string }) {
+function CodeBlock({
+  content,
+  variant = 'inline',
+  onCopy,
+}: {
+  content: string
+  variant?: 'inline' | 'standalone'
+  onCopy?: (text: string) => void
+}) {
+  const [copied, setCopied] = useState(false)
+  const lines = content.split('\n')
+  const showLineNumbers = lines.length > 1 || (lines.length === 1 && lines[0].length > 40)
+
+  useEffect(() => {
+    if (!copied) return
+    const t = setTimeout(() => setCopied(false), 2000)
+    return () => clearTimeout(t)
+  }, [copied])
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(content).then(() => {
+      setCopied(true)
+      onCopy?.(content)
+    })
+  }, [content, onCopy])
+
   return (
-    <span className="message-code-block-wrap" role="figure" aria-label="Code block">
-      <div className="message-code-block-header">
-        <span className="message-code-block-dots" aria-hidden>
-          <span /><span /><span />
+    <figure
+      className={`code-block code-block--${variant}`}
+      role="figure"
+      aria-label="Code block"
+      data-line-numbers={showLineNumbers}
+    >
+      <header className="code-block__header">
+        <span className="code-block__chrome" aria-hidden>
+          <span className="code-block__dot code-block__dot--red" />
+          <span className="code-block__dot code-block__dot--yellow" />
+          <span className="code-block__dot code-block__dot--green" />
         </span>
-        <span className="message-code-block-label">Code</span>
+        <span className="code-block__title">Code</span>
+        <button
+          type="button"
+          className={`code-block__copy${copied ? ' code-block__copy--copied' : ''}`}
+          onClick={handleCopy}
+          aria-label={copied ? 'Copied' : 'Copy code'}
+          title={copied ? 'Copied' : 'Copy code'}
+        >
+          {copied ? (
+            <>
+              <span className="code-block__copy-icon" aria-hidden>✓</span>
+              <span>Copied!</span>
+            </>
+          ) : (
+            <>
+              <span className="code-block__copy-icon" aria-hidden>⎘</span>
+              <span>Copy code</span>
+            </>
+          )}
+        </button>
+      </header>
+      <div className="code-block__body">
+        {showLineNumbers && (
+          <div className="code-block__gutter" aria-hidden>
+            {lines.map((_, i) => (
+              <span key={i} className="code-block__line-num">
+                {i + 1}
+              </span>
+            ))}
+          </div>
+        )}
+        <pre className="code-block__pre">
+          <code className="code-block__code">
+            {lines.map((line, i) => (
+              <span key={i} className="code-block__line">
+                {line || '\u00A0'}
+              </span>
+            ))}
+          </code>
+        </pre>
       </div>
-      <code className="message-code-block">{content}</code>
-    </span>
+    </figure>
   )
 }
 
@@ -84,7 +169,7 @@ function MessageBody({ body }: { body: string }) {
     <span className="message-body">
       {segments.map((seg, i) =>
         seg.type === 'code' ? (
-          <CodeBlock key={i} content={seg.content} />
+          <CodeBlock key={i} content={seg.content} variant="inline" />
         ) : (
           <span key={i} className="message-text-wrap">
             {renderTextWithInlineCode(seg.content, `t-${i}`)}
@@ -151,9 +236,8 @@ export function MessageList({ messages }: Props) {
         <ul className="message-list-ul">
           {messages.map((m) => {
             const codeOnly = isCodeOnlyMessage(m.body)
-            const copyText = codeOnly
-              ? (parseMessageSegments(m.body)[0] as Segment).content
-              : m.body
+            const segments = parseMessageSegments(m.body)
+            const copyText = codeOnly ? (segments[0] as Segment).content : m.body
             return (
               <li
                 key={m.id}
@@ -167,7 +251,7 @@ export function MessageList({ messages }: Props) {
                     </span>
                   )}
                   {codeOnly ? (
-                    <CodeBlock content={copyText} />
+                    <CodeBlock content={copyText} variant="standalone" />
                   ) : (
                     <MessageBody body={m.body} />
                   )}
