@@ -1,17 +1,7 @@
 import { useState, useCallback, useLayoutEffect, useRef, useEffect, type ReactNode } from 'react'
 import { formatSenderName } from './protocol'
-
-export type MessageItem = {
-  id: string
-  body: string
-  at: number
-  direction: 'out' | 'in'
-  senderName?: string | null
-}
-
-type Props = {
-  messages: MessageItem[]
-}
+import { FileMessageCard } from './FileMessageCard'
+import type { ChatEvent, TextEvent } from './useTransferSession'
 
 type Segment = { type: 'text' | 'code'; content: string }
 
@@ -239,40 +229,59 @@ function CopyButton({ text }: { text: string }) {
 
 const ENTER_ANIMATION_MS = 280
 
-export function MessageList({ messages }: Props) {
+type Props = {
+  events: ChatEvent[]
+  onDownloadIncoming: (id: string) => void
+  onDownloadOutgoing: (id: string) => void
+}
+
+export function ChatTimeline({ events, onDownloadIncoming, onDownloadOutgoing }: Props) {
   const listRef = useRef<HTMLDivElement>(null)
   const prevCountRef = useRef(0)
   const [enteringId, setEnteringId] = useState<string | null>(null)
 
   useLayoutEffect(() => {
     const el = listRef.current
-    if (!el || messages.length === 0) return
+    if (!el || events.length === 0) return
     el.scrollTop = el.scrollHeight
-  }, [messages])
+  }, [events])
 
   useEffect(() => {
-    const count = messages.length
+    const count = events.length
     if (count > prevCountRef.current && count > 0) {
       prevCountRef.current = count
-      const last = messages[count - 1]
+      const last = events[count - 1]
       setEnteringId(last.id)
       const t = setTimeout(() => setEnteringId(null), ENTER_ANIMATION_MS)
       return () => clearTimeout(t)
     }
     prevCountRef.current = count
-  }, [messages])
+  }, [events])
 
   return (
-    <div ref={listRef} className="message-list" role="log" aria-label="Messages">
-      {messages.length === 0 ? (
-        <p className="message-list-empty">No messages yet.</p>
+    <div ref={listRef} className="message-list timeline-list" role="log" aria-label="Messages and files timeline">
+      {events.length === 0 ? (
+        <p className="message-list-empty">No events yet.</p>
       ) : (
         <ul className="message-list-ul">
-          {messages.map((m) => {
+          {events.map((e) => {
+            if (e.type === 'file') {
+              return (
+                <FileMessageCard
+                  key={e.id}
+                  event={e}
+                  onDownloadIncoming={onDownloadIncoming}
+                  onDownloadOutgoing={onDownloadOutgoing}
+                />
+              )
+            }
+            
+            const m = e as TextEvent
             const codeOnly = isCodeOnlyMessage(m.body)
             const segments = parseMessageSegments(m.body)
             const copyText = codeOnly ? (segments[0] as Segment).content : m.body
             const senderDisplay = m.senderName ? formatSenderName(m.senderName) : null
+            
             return (
               <li
                 key={m.id}
