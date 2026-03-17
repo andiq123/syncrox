@@ -6,7 +6,6 @@ export const MessageType = {
   Text: 'text',
   Composing: 'composing',
   FileStart: 'file_start',
-  FileChunk: 'file_chunk',
   FileEnd: 'file_end',
   ServerClosing: 'server_closing',
   StartFresh: 'start_fresh',
@@ -22,15 +21,11 @@ export type FileStartPayload = {
   name: string
   size: number
   mime_type?: string
+  total_chunks?: number
   sender_id?: string
   sender_name?: string
 }
-export type FileChunkPayload = {
-  transfer_id: string
-  index: number
-  data: string
-}
-export type FileEndPayload = { transfer_id: string }
+export type FileEndPayload = { transfer_id: string; total_chunks?: number; size?: number }
 export type ErrorPayload = { message: string }
 export type PeerInfo = { peer_id: string; name: string }
 export type JoinedPayload = { code: string; name?: string; peers?: PeerInfo[] }

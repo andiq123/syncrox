@@ -41,6 +41,18 @@ export function MessageComposer({ onSendText, onSendFiles, onComposingChange, di
     [handleSendText],
   )
 
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      if (disabled) return
+      const files = e.clipboardData?.files
+      if (files && files.length > 0) {
+        e.preventDefault()
+        onSendFiles(files)
+      }
+    },
+    [disabled, onSendFiles],
+  )
+
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.files && e.target.files.length > 0) {
@@ -73,6 +85,7 @@ export function MessageComposer({ onSendText, onSendFiles, onComposingChange, di
       <input
         type="file"
         multiple
+        accept="*/*"
         ref={fileInputRef}
         style={{ display: 'none' }}
         onChange={handleFileChange}
@@ -86,6 +99,7 @@ export function MessageComposer({ onSendText, onSendFiles, onComposingChange, di
           value={body}
           onChange={handleTextChange}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           disabled={disabled}
           rows={1}
           aria-label="Message input"

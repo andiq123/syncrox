@@ -48,8 +48,9 @@ export type IncomingFileState = {
   name: string
   size: number
   mimeType: string
+  totalChunks: number
   chunks: Map<number, Uint8Array>
-  received: number
+  receivedBytes: number
   done: boolean
   senderName?: string | null
   at: number
@@ -59,7 +60,7 @@ export type OutgoingFileState = {
   transferId: string
   name: string
   size: number
-  sent: number
+  sentBytes: number
   done: boolean
   senderName?: string | null
   at: number
@@ -92,14 +93,16 @@ function makeIncomingFileEntry(
   size: number,
   mimeType: string,
   senderName?: string | null,
+  totalChunks?: number,
 ): IncomingFileState {
   return {
     transferId,
     name,
     size,
     mimeType,
+    totalChunks: totalChunks ?? Math.ceil((size || 0) / ChunkSize),
     chunks: new Map<number, Uint8Array>(),
-    received: 0,
+    receivedBytes: 0,
     done: false,
     senderName: senderName ?? null,
     at: Date.now(),
@@ -114,13 +117,12 @@ function buildBlobFromIncoming(
   if (!file?.done) return null
   const refChunks = fileRef?.chunks ?? new Map<number, Uint8Array>()
   const stateChunks = fileState?.chunks ?? new Map<number, Uint8Array>()
-  const keys = Array.from(new Set([...refChunks.keys(), ...stateChunks.keys()])).sort((a, b) => a - b)
-  const parts: BlobPart[] = []
-  for (const k of keys) {
-    const part = refChunks.get(k) ?? stateChunks.get(k)
-    if (part?.length) parts.push(part.slice(0).buffer)
+  const parts: BlobPart[] = new Array(file.totalChunks)
+  for (let i = 0; i < file.totalChunks; i += 1) {
+    const part = refChunks.get(i) ?? stateChunks.get(i)
+    if (!part) return null
+    parts[i] = part.slice(0).buffer
   }
-  if (parts.length === 0) return null
   return {
     blob: new Blob(parts, { type: file.mimeType || undefined }),
     name: file.name,
@@ -172,15 +174,19 @@ export function useTransferSession() {
       if (!file) return prev
       const next = new Map(prev)
       const nextFile = { ...file, chunks: new Map(file.chunks) }
-      nextFile.chunks.set(index, data)
-      nextFile.received = nextFile.chunks.size
+      if (!nextFile.chunks.has(index)) {
+        nextFile.chunks.set(index, data)
+        nextFile.receivedBytes += data.byteLength
+      }
       next.set(transferId, nextFile)
       return next
     })
     const refFile = incomingRef.current.get(transferId)
     if (refFile) {
-      refFile.chunks.set(index, data)
-      refFile.received = refFile.chunks.size
+      if (!refFile.chunks.has(index)) {
+        refFile.chunks.set(index, data)
+        refFile.receivedBytes += data.byteLength
+      }
     }
   }, [])
 
@@ -249,6 +255,7 @@ export function useTransferSession() {
           p.size,
           p.mime_type ?? '',
           p.sender_name,
+          p.total_chunks,
         )
         setIncomingFiles((prev) => {
           const next = new Map(prev)
@@ -262,12 +269,19 @@ export function useTransferSession() {
         const p = e.payload as FileEndPayload
         if (!p?.transfer_id) return
         const f = incomingRef.current.get(p.transfer_id)
-        if (f) f.done = true
+        if (f) {
+          if (typeof p.total_chunks === 'number' && p.total_chunks > 0) f.totalChunks = p.total_chunks
+          const isComplete = f.totalChunks > 0 && f.chunks.size >= f.totalChunks
+          f.done = isComplete
+        }
         setIncomingFiles((prev) => {
           const next = new Map(prev)
           const file = next.get(p.transfer_id)
           if (!file) return next
-          next.set(p.transfer_id, { ...file, done: true })
+          const totalChunks =
+            typeof p.total_chunks === 'number' && p.total_chunks > 0 ? p.total_chunks : file.totalChunks
+          const done = totalChunks > 0 && file.chunks.size >= totalChunks
+          next.set(p.transfer_id, { ...file, totalChunks, done })
           return next
         })
         return
@@ -315,14 +329,13 @@ export function useTransferSession() {
 
       outgoing.forEach((f, id) => {
         if (f.done) return
-        recordSample(id, f.sent * ChunkSize, now, next)
+        recordSample(id, f.sentBytes, now, next)
       })
       incoming.forEach((f, id) => {
         if (f.done) return
         const refFile = incomingRef.current.get(id)
-        const received = refFile?.chunks.size ?? f.received
-        const bytes = f.size ? Math.min(f.size, received * ChunkSize) : received * ChunkSize
-        recordSample(id, bytes, now, next)
+        const receivedBytes = refFile?.receivedBytes ?? f.receivedBytes
+        recordSample(id, receivedBytes, now, next)
       })
 
       setTransferSpeeds((prev) => {
@@ -386,6 +399,7 @@ export function useTransferSession() {
       const transferId = `f-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
       const size = file.size
       const creationTime = Date.now()
+      const totalChunks = Math.ceil(size / ChunkSize)
 
       setOutgoingFiles((prev) => {
         const next = new Map(prev)
@@ -393,7 +407,7 @@ export function useTransferSession() {
           transferId,
           name: file.name,
           size,
-          sent: 0,
+          sentBytes: 0,
           done: false,
           senderName: peerName ?? undefined,
           at: creationTime,
@@ -409,17 +423,17 @@ export function useTransferSession() {
             name: file.name,
             size,
             mime_type: file.type || undefined,
+            total_chunks: totalChunks,
           },
         })
       )
 
       const chunkSize = ChunkSize
-      const parts: BlobPart[] = []
       const reader = file.stream().getReader()
       let index = 0
-      const totalChunks = Math.ceil(size / chunkSize)
       const progressInterval = Math.max(1, Math.floor(totalChunks / 50))
       let buffer = new Uint8Array(0)
+      let sentBytes = 0
 
       while (true) {
         const { done, value } = await reader.read()
@@ -433,14 +447,14 @@ export function useTransferSession() {
           const chunk = buffer.subarray(0, chunkSize)
           buffer = buffer.subarray(chunkSize)
           send(encodeChunk(transferId, index, chunk))
-          parts.push(chunk.slice(0).buffer)
           index += 1
+          sentBytes += chunk.byteLength
           if (index % progressInterval === 0 || index === totalChunks) {
             setOutgoingFiles((prev) => {
               const next = new Map(prev)
               const f = next.get(transferId)
               if (!f) return prev
-              next.set(transferId, { ...f, sent: index })
+              next.set(transferId, { ...f, sentBytes })
               return next
             })
           }
@@ -449,11 +463,24 @@ export function useTransferSession() {
       }
       if (buffer.length > 0) {
         send(encodeChunk(transferId, index, buffer))
-        parts.push(buffer.slice(0).buffer)
         index += 1
+        sentBytes += buffer.byteLength
       }
 
-      send(JSON.stringify({ type: MessageType.FileEnd, payload: { transfer_id: transferId } }))
+      setOutgoingFiles((prev) => {
+        const next = new Map(prev)
+        const f = next.get(transferId)
+        if (!f) return prev
+        next.set(transferId, { ...f, sentBytes })
+        return next
+      })
+
+      send(
+        JSON.stringify({
+          type: MessageType.FileEnd,
+          payload: { transfer_id: transferId, total_chunks: totalChunks, size },
+        }),
+      )
       setOutgoingFiles((prev) => {
         const next = new Map(prev)
         const f = next.get(transferId)
@@ -461,8 +488,7 @@ export function useTransferSession() {
         next.set(transferId, { ...f, done: true })
         return next
       })
-      const blob = new Blob(parts, { type: file.type || undefined })
-      outgoingBlobsRef.current.set(transferId, { name: file.name, blob })
+      outgoingBlobsRef.current.set(transferId, { name: file.name, blob: file })
     },
     [send, peerName]
   )
@@ -493,8 +519,7 @@ export function useTransferSession() {
     const events: ChatEvent[] = [...messages]
 
     Array.from(incomingFiles.values()).forEach((f) => {
-      const receivedChunks = incomingRef.current.get(f.transferId)?.chunks.size ?? f.received
-      const receivedBytes = receivedChunks * ChunkSize
+      const receivedBytes = incomingRef.current.get(f.transferId)?.receivedBytes ?? f.receivedBytes
       const progress = f.size ? Math.min(1, receivedBytes / f.size) : 1
       events.push({
         type: 'file',
@@ -513,8 +538,7 @@ export function useTransferSession() {
     })
 
     Array.from(outgoingFiles.values()).forEach((f) => {
-      const sentBytes = f.sent * ChunkSize
-      const progress = f.size ? Math.min(1, sentBytes / f.size) : 1
+      const progress = f.size ? Math.min(1, f.sentBytes / f.size) : 1
       events.push({
         type: 'file',
         id: `file-out-${f.transferId}`,
@@ -525,7 +549,7 @@ export function useTransferSession() {
         direction: 'out',
         done: f.done,
         progress,
-        remaining: Math.max(0, f.size - sentBytes),
+        remaining: Math.max(0, f.size - f.sentBytes),
         speed: transferSpeeds.get(f.transferId),
         senderName: f.senderName,
       })
