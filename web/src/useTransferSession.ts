@@ -38,6 +38,7 @@ export type FileEvent = {
   progress: number
   remaining: number
   speed?: number
+  error?: string
   senderName?: string | null
 }
 
@@ -62,6 +63,7 @@ export type OutgoingFileState = {
   size: number
   sentBytes: number
   done: boolean
+  error?: string
   senderName?: string | null
   at: number
 }
@@ -82,6 +84,12 @@ function createDownloadTrigger(): (blob: Blob, name: string) => void {
     anchor.href = url
     anchor.download = name
     anchor.click()
+    window.setTimeout(() => {
+      if (lastUrl === url) {
+        URL.revokeObjectURL(url)
+        lastUrl = null
+      }
+    }, 30000)
   }
 }
 
@@ -271,7 +279,7 @@ export function useTransferSession() {
         const f = incomingRef.current.get(p.transfer_id)
         if (f) {
           if (typeof p.total_chunks === 'number' && p.total_chunks > 0) f.totalChunks = p.total_chunks
-          const isComplete = f.totalChunks > 0 && f.chunks.size >= f.totalChunks
+          const isComplete = f.totalChunks === 0 ? f.size === 0 : f.chunks.size >= f.totalChunks
           f.done = isComplete
         }
         setIncomingFiles((prev) => {
@@ -280,7 +288,7 @@ export function useTransferSession() {
           if (!file) return next
           const totalChunks =
             typeof p.total_chunks === 'number' && p.total_chunks > 0 ? p.total_chunks : file.totalChunks
-          const done = totalChunks > 0 && file.chunks.size >= totalChunks
+          const done = totalChunks === 0 ? file.size === 0 : file.chunks.size >= totalChunks
           next.set(p.transfer_id, { ...file, totalChunks, done })
           return next
         })
@@ -293,7 +301,7 @@ export function useTransferSession() {
     [handleBinaryChunk, clearAllState],
   )
 
-  const { state, send, restart } = useSocket({ code: DEFAULT_SESSION_CODE, onMessage })
+  const { state, send, sendWhenReady, restart } = useSocket({ code: DEFAULT_SESSION_CODE, onMessage })
   const prevStateRef = useRef(state)
 
   const purgeSession = useCallback(() => {
@@ -378,7 +386,11 @@ export function useTransferSession() {
     (body: string) => {
       if (!body.trim()) return
       sendComposing(false)
-      send(JSON.stringify({ type: MessageType.Text, payload: { body: body.trim() } }))
+      const didSend = send(JSON.stringify({ type: MessageType.Text, payload: { body: body.trim() } }))
+      if (!didSend) {
+        setConnectionError('Message was not sent because the connection is not open.')
+        return
+      }
       setMessages((prev) => [
         ...prev,
         {
@@ -415,7 +427,7 @@ export function useTransferSession() {
         return next
       })
 
-      send(
+      if (!send(
         JSON.stringify({
           type: MessageType.FileStart,
           payload: {
@@ -425,8 +437,18 @@ export function useTransferSession() {
             mime_type: file.type || undefined,
             total_chunks: totalChunks,
           },
+        }),
+      )) {
+        setOutgoingFiles((prev) => {
+          const next = new Map(prev)
+          const f = next.get(transferId)
+          if (!f) return prev
+          next.set(transferId, { ...f, error: 'Transfer could not start because the connection is not open.' })
+          return next
         })
-      )
+        setConnectionError('Transfer could not start because the connection is not open.')
+        return
+      }
 
       const chunkSize = ChunkSize
       const reader = file.stream().getReader()
@@ -434,37 +456,53 @@ export function useTransferSession() {
       const progressInterval = Math.max(1, Math.floor(totalChunks / 50))
       let buffer = new Uint8Array(0)
       let sentBytes = 0
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (value?.length) {
-          const combined = new Uint8Array(buffer.length + value.length)
-          combined.set(buffer)
-          combined.set(value, buffer.length)
-          buffer = combined
-        }
-        while (buffer.length >= chunkSize) {
-          const chunk = buffer.subarray(0, chunkSize)
-          buffer = buffer.subarray(chunkSize)
-          send(encodeChunk(transferId, index, chunk))
-          index += 1
-          sentBytes += chunk.byteLength
-          if (index % progressInterval === 0 || index === totalChunks) {
-            setOutgoingFiles((prev) => {
-              const next = new Map(prev)
-              const f = next.get(transferId)
-              if (!f) return prev
-              next.set(transferId, { ...f, sentBytes })
-              return next
-            })
-          }
-        }
-        if (done) break
+      const markFailed = (message: string) => {
+        setOutgoingFiles((prev) => {
+          const next = new Map(prev)
+          const f = next.get(transferId)
+          if (!f) return prev
+          next.set(transferId, { ...f, error: message })
+          return next
+        })
+        setConnectionError(message)
       }
-      if (buffer.length > 0) {
-        send(encodeChunk(transferId, index, buffer))
-        index += 1
-        sentBytes += buffer.byteLength
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (value?.length) {
+            const combined = new Uint8Array(buffer.length + value.length)
+            combined.set(buffer)
+            combined.set(value, buffer.length)
+            buffer = combined
+          }
+          while (buffer.length >= chunkSize) {
+            const chunk = buffer.subarray(0, chunkSize)
+            buffer = buffer.subarray(chunkSize)
+            await sendWhenReady(encodeChunk(transferId, index, chunk))
+            index += 1
+            sentBytes += chunk.byteLength
+            if (index % progressInterval === 0 || index === totalChunks) {
+              setOutgoingFiles((prev) => {
+                const next = new Map(prev)
+                const f = next.get(transferId)
+                if (!f) return prev
+                next.set(transferId, { ...f, sentBytes })
+                return next
+              })
+            }
+          }
+          if (done) break
+        }
+        if (buffer.length > 0) {
+          await sendWhenReady(encodeChunk(transferId, index, buffer))
+          index += 1
+          sentBytes += buffer.byteLength
+        }
+      } catch (error) {
+        await reader.cancel().catch(() => undefined)
+        markFailed(error instanceof Error ? error.message : 'Transfer failed')
+        return
       }
 
       setOutgoingFiles((prev) => {
@@ -475,12 +513,15 @@ export function useTransferSession() {
         return next
       })
 
-      send(
+      if (!send(
         JSON.stringify({
           type: MessageType.FileEnd,
           payload: { transfer_id: transferId, total_chunks: totalChunks, size },
         }),
-      )
+      )) {
+        markFailed('Transfer finished locally, but the connection closed before confirmation.')
+        return
+      }
       setOutgoingFiles((prev) => {
         const next = new Map(prev)
         const f = next.get(transferId)
@@ -490,7 +531,7 @@ export function useTransferSession() {
       })
       outgoingBlobsRef.current.set(transferId, { name: file.name, blob: file })
     },
-    [send, peerName]
+    [send, sendWhenReady, peerName]
   )
 
   const sendFiles = useCallback(
@@ -551,6 +592,7 @@ export function useTransferSession() {
         progress,
         remaining: Math.max(0, f.size - f.sentBytes),
         speed: transferSpeeds.get(f.transferId),
+        error: f.error,
         senderName: f.senderName,
       })
     })
