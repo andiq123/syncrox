@@ -29,7 +29,9 @@ function progressAriaLabelFor(
   action: 'Sending' | 'Receiving',
   name: string,
   remaining: number,
+  error?: string,
 ): string {
+  if (error) return `${action} ${name} failed: ${error}`
   if (remaining <= 0) return `${action} ${name}`
   return `${action} ${name}, ${formatRemaining(remaining)}`
 }
@@ -50,7 +52,8 @@ function FileIcon() {
 
 export function FileMessageCard({ event, onDownloadIncoming, onDownloadOutgoing }: Props) {
   const showSpeed = !event.done && event.speed != null && event.speed > 0
-  const remainingText = !event.done && event.remaining > 0 ? formatRemaining(event.remaining) : null
+  const hasError = Boolean(event.error)
+  const remainingText = !event.done && !hasError && event.remaining > 0 ? formatRemaining(event.remaining) : null
   const senderDisplay = event.senderName ? formatSenderName(event.senderName) : null
 
   const progressValue = event.progress * event.size
@@ -58,6 +61,7 @@ export function FileMessageCard({ event, onDownloadIncoming, onDownloadOutgoing 
     event.direction === 'in' ? 'Receiving' : 'Sending',
     event.name,
     event.remaining,
+    event.error,
   )
 
   const handleDownload = () => {
@@ -73,25 +77,30 @@ export function FileMessageCard({ event, onDownloadIncoming, onDownloadOutgoing 
             {senderDisplay}:
           </span>
         )}
-        <div className={`file-item file-item--${event.direction}`}>
+        <div className={`file-item file-item--${event.direction}${hasError ? ' file-item--error' : ''}`}>
           <FileIcon />
           <div className="file-item-info">
             <span className="file-item-name">{event.name}</span>
             <div className="file-item-meta" aria-live="polite">
               <span className="file-item-size">{formatSize(event.size)}</span>
+              {hasError && (
+                <span className="file-item-error" aria-label={`Transfer failed: ${event.error}`}>
+                  Failed
+                </span>
+              )}
               {remainingText != null && (
                 <span className="file-item-remaining" aria-label={remainingText}>
                   {remainingText}
                 </span>
               )}
-              {showSpeed && (
+              {showSpeed && !hasError && (
                 <span className="file-item-speed" aria-label={`Speed ${formatSpeed(event.speed!)}`}>
                   {formatSpeed(event.speed!)}
                 </span>
               )}
             </div>
           </div>
-          {!event.done ? (
+          {!event.done || hasError ? (
             <progress
               className="file-progress"
               value={progressValue}

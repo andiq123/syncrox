@@ -8,6 +8,40 @@ type Options = {
   onMessage: (data: string | ArrayBuffer) => void
 }
 
+const SEND_BUFFER_LIMIT = 4 * 1024 * 1024
+
+function waitForSocketBuffer(ws: WebSocket, limit = SEND_BUFFER_LIMIT): Promise<void> {
+  if (ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error('Connection is not open'))
+  if (ws.bufferedAmount <= limit) return Promise.resolve()
+
+  return new Promise((resolve, reject) => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    let intervalId: ReturnType<typeof setInterval> | null = null
+
+    const cleanup = () => {
+      if (timeoutId) clearTimeout(timeoutId)
+      if (intervalId) clearInterval(intervalId)
+    }
+
+    intervalId = setInterval(() => {
+      if (ws.readyState !== WebSocket.OPEN) {
+        cleanup()
+        reject(new Error('Connection closed during transfer'))
+        return
+      }
+      if (ws.bufferedAmount <= limit) {
+        cleanup()
+        resolve()
+      }
+    }, 40)
+
+    timeoutId = setTimeout(() => {
+      cleanup()
+      reject(new Error('Transfer stalled while waiting for the network'))
+    }, 30000)
+  })
+}
+
 export function useSocket({ code, onMessage }: Options) {
   const [state, setState] = useState<ConnectionState>('closed')
   const wsRef = useRef<WebSocket | null>(null)
@@ -68,10 +102,19 @@ export function useSocket({ code, onMessage }: Options) {
     connect()
   }, [connect])
 
-  const send = useCallback((data: string | ArrayBuffer) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(data)
-    }
+  const send = useCallback((data: string | ArrayBuffer): boolean => {
+    const ws = wsRef.current
+    if (ws?.readyState !== WebSocket.OPEN) return false
+    ws.send(data)
+    return true
+  }, [])
+
+  const sendWhenReady = useCallback(async (data: string | ArrayBuffer): Promise<void> => {
+    const ws = wsRef.current
+    if (ws?.readyState !== WebSocket.OPEN) throw new Error('Connection is not open')
+    await waitForSocketBuffer(ws)
+    if (ws.readyState !== WebSocket.OPEN) throw new Error('Connection closed during transfer')
+    ws.send(data)
   }, [])
 
   useEffect(() => {
@@ -89,5 +132,5 @@ export function useSocket({ code, onMessage }: Options) {
     }
   }, [code, connect])
 
-  return { state, send, connect, disconnect, restart }
+  return { state, send, sendWhenReady, connect, disconnect, restart }
 }
